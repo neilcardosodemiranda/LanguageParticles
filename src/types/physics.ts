@@ -72,6 +72,25 @@ export interface SynapticNeuron {
   learnedTokens: string[]; // n-grams / words tuned to this soma
 }
 
+export interface CorpusCalibrationArtifact {
+  tokenDensityRho: number;
+  structuralCountThresholdC: number;
+  sentenceStartPriorP: number;
+  forwardEntropyBoundaryHfwd: number;
+  backwardEntropyBoundaryHbwd: number;
+  transitionEntropyThTrans: number;
+  temporalDecayLambda: number;
+  coherenceScalePsi: number;
+  directionalSeparationTheta: number;
+  calibrationTimeMs: number;
+  weights: {
+    alphaBackward: number;
+    betaPresent: number;
+    gammaForward: number;
+    deltaReverse: number;
+  };
+}
+
 export interface BookTrainingStats {
   bookTitle: string;
   totalWordsParsed: number;
@@ -82,6 +101,11 @@ export interface BookTrainingStats {
   trainingEpoch: number;
   stdpPotentiatedSynapses: number;
   isTraining: boolean;
+  totalCharsParsed?: number;
+  uniqueCharsCount?: number;
+  charSynapsesCount?: number;
+  calibration?: CorpusCalibrationArtifact;
+  narrativeMoleculesCount?: number;
 }
 
 export interface AttractorWell {
@@ -143,6 +167,7 @@ export interface SimulationSettings {
   showWaveFunctions: boolean;
   showSynapticGrid: boolean;
   temperature: number; // thermal noise
+  useWebGPU: boolean; // WebGPU compute shader acceleration
 }
 
 export interface ComputerTelemetry {
@@ -158,6 +183,42 @@ export interface ComputerTelemetry {
   recentSpikes: Array<{ neuronId: string; time: number; core: string }>;
 }
 
+export interface CharWavePacket {
+  fragment: string;
+  charLength: number;
+  energyMv: number;
+  spinState: string;
+  conductanceSiemens: number;
+  forwardEntropyBits?: number;
+  backwardEntropyBits?: number;
+  chemicalPotential?: number;
+}
+
+export interface TriChamberTelemetry {
+  narrativeMolecule: {
+    prevSentence: string;
+    focalSentence: string;
+    nextSentence: string;
+  };
+  commissureDeltaE: number;
+  forwardEnergy: number;
+  backwardEnergy: number;
+  bidirectionalConsistency: {
+    cBackward: number;
+    cPresent: number;
+    cForward: number;
+    cReverse: number;
+    cTotal: number;
+  };
+  multiViewStability: number;
+  viewResonanceProfile: number[]; // V0..V7
+  pauliOrthogonalityScore: number;
+  h8PhaseSeed: string;
+  h8HexSignature: string;
+  catGatePassed: boolean;
+  catGateReason: string;
+}
+
 export interface MemoryRecallResult {
   query: string;
   matchedSentence: string;
@@ -166,4 +227,16 @@ export interface MemoryRecallResult {
   predictedTokens: string[];
   resonanceScore: number;
   activePathways: string[];
+  physicsMode?: 'pure_char_physics' | 'hybrid_semantic';
+  rawMemristorStream?: string;
+  charWavePackets?: CharWavePacket[];
+  caseSpinCoupling?: {
+    uppercaseHits: number;
+    lowercaseHits: number;
+    punctuationBosons: number;
+    spaceGluons: number;
+  };
+  triChamber?: TriChamberTelemetry;
 }
+
+

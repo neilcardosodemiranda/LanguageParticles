@@ -5,6 +5,7 @@
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { NeuromorphicPhysicsEngine } from './physics/engine';
+import { gpuAccelerator } from './physics/webgpuEngine';
 import { ColliderCanvas } from './components/ColliderCanvas';
 import { BeamInjectorControls } from './components/BeamInjectorControls';
 import { NeuromorphicOscilloscope } from './components/NeuromorphicOscilloscope';
@@ -14,6 +15,8 @@ import { FieldModulatorPanel } from './components/FieldModulatorPanel';
 import { InspectorDrawer } from './components/InspectorDrawer';
 import { ParticlePhysicsTheoryModal } from './components/ParticlePhysicsTheoryModal';
 import { GutenbergTrainer, SAMPLE_GUTENBERG_BOOKS } from './components/GutenbergTrainer';
+import { GpuPerformanceDashboard } from './components/GpuPerformanceDashboard';
+import { TemporalMultiscaleChamber } from './components/TemporalMultiscaleChamber';
 import {
   LetterParticle,
   SynapticNeuron,
@@ -21,12 +24,15 @@ import {
   BookTrainingStats,
 } from './types/physics';
 import { soundEngine } from './utils/audio';
-import { Atom, BookOpen, RotateCcw, Volume2, VolumeX, Sparkles, Database } from 'lucide-react';
+import { Atom, BookOpen, RotateCcw, Volume2, VolumeX, Sparkles, Database, Cpu, Layers } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export default function App() {
   // Instantiate singleton physics engine
   const engine = useMemo(() => new NeuromorphicPhysicsEngine(1100, 580), []);
+
+  // Active laboratory branch: isolated Temporal Multiscale Chamber vs. Linguistic Collider (Gutenberg Trainer)
+  const [activeLabBranch, setActiveLabBranch] = useState<'temporal_multiscale' | 'collider'>('collider');
 
   // UI States
   const [activeTool, setActiveTool] = useState<'sling' | 'well' | 'probe' | 'inspect'>('sling');
@@ -35,6 +41,7 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [isTheoryOpen, setIsTheoryOpen] = useState<boolean>(false);
   const [showTrainer, setShowTrainer] = useState<boolean>(true);
+  const [showGpuDashboard, setShowGpuDashboard] = useState<boolean>(true);
 
   // Inspected objects
   const [inspectedParticle, setInspectedParticle] = useState<LetterParticle | null>(null);
@@ -52,8 +59,10 @@ export default function App() {
     return () => clearInterval(timer);
   }, [engine]);
 
-  // Initial setup: prime engine with Alice in Wonderland (so golden key and wonderland vocabulary exist)
+  // Initial setup: initialize WebGPU accelerator and prime engine with Alice in Wonderland
   useEffect(() => {
+    gpuAccelerator.init();
+
     const aliceBook = SAMPLE_GUTENBERG_BOOKS[0];
     if (aliceBook) {
       engine.trainOnText(aliceBook.text, aliceBook.title, 2, 0.12);
@@ -196,61 +205,117 @@ export default function App() {
 
         {/* Global Controls */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowTrainer(!showTrainer)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-medium transition-colors cursor-pointer ${
-              showTrainer
-                ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
-                : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-amber-300'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span>Gutenberg Trainer</span>
-            {engine.trainingStats.totalWordsParsed > 0 && (
-              <span className="bg-amber-950/80 text-amber-200 text-[10px] px-1.5 py-0.2 rounded font-mono">
-                {engine.trainingStats.uniqueVocabularyCount}w
-              </span>
-            )}
-          </button>
+          {/* Isolated Research Chamber Switcher */}
+          <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-md mr-2">
+            <button
+              onClick={() => setActiveLabBranch('temporal_multiscale')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+                activeLabBranch === 'temporal_multiscale'
+                  ? 'bg-cyan-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Temporal Multiscale Chamber</span>
+            </button>
+            <button
+              onClick={() => setActiveLabBranch('collider')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+                activeLabBranch === 'collider'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Atom className="w-3.5 h-3.5" />
+              <span>Linguistic Collider</span>
+            </button>
+          </div>
 
-          <button
-            onClick={() => setIsTheoryOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-sky-300 font-medium transition-colors cursor-pointer"
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Standard Model Theory</span>
-          </button>
+          {activeLabBranch === 'collider' && (
+            <>
+              <button
+                onClick={() => setShowGpuDashboard(!showGpuDashboard)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-medium transition-colors cursor-pointer ${
+                  showGpuDashboard
+                    ? 'bg-cyan-600 text-white border-cyan-500 shadow-sm'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-cyan-300'
+                }`}
+              >
+                <Cpu className="w-3.5 h-3.5" />
+                <span>GPU Performance</span>
+                <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-black/40 text-cyan-200">
+                  {engine.settings.useWebGPU ? 'WGSL' : 'CPU'}
+                </span>
+              </button>
 
-          <button
-            onClick={() => handleRunPreset('bigbang')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 font-medium transition-colors cursor-pointer"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-            <span>Reset Collider</span>
-          </button>
+              <button
+                onClick={() => setShowTrainer(!showTrainer)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-medium transition-colors cursor-pointer ${
+                  showTrainer
+                    ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-amber-300'
+                }`}
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Gutenberg Trainer</span>
+                {engine.trainingStats.totalWordsParsed > 0 && (
+                  <span className="bg-amber-950/80 text-amber-200 text-[10px] px-1.5 py-0.2 rounded font-mono">
+                    {engine.trainingStats.uniqueVocabularyCount}w
+                  </span>
+                )}
+              </button>
 
-          <button
-            onClick={() => {
-              const next = !soundEnabled;
-              setSoundEnabled(next);
-              soundEngine.setMuted(!next);
-            }}
-            className={`p-1.5 rounded border text-xs transition-colors cursor-pointer ${
-              soundEnabled
-                ? 'bg-slate-900 border-slate-800 text-sky-400 hover:bg-slate-800'
-                : 'bg-slate-900 border-slate-800 text-slate-600 hover:text-slate-400'
-            }`}
-            title={soundEnabled ? 'Acoustic Synthesizer ON' : 'Acoustic Synthesizer MUTED'}
-          >
-            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-          </button>
+              <button
+                onClick={() => setIsTheoryOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-sky-300 font-medium transition-colors cursor-pointer"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Standard Model Theory</span>
+              </button>
+
+              <button
+                onClick={() => handleRunPreset('bigbang')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 font-medium transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                <span>Reset Collider</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  const next = !soundEnabled;
+                  setSoundEnabled(next);
+                  soundEngine.setMuted(!next);
+                }}
+                className={`p-1.5 rounded border text-xs transition-colors cursor-pointer ${
+                  soundEnabled
+                    ? 'bg-slate-900 border-slate-800 text-sky-400 hover:bg-slate-800'
+                    : 'bg-slate-900 border-slate-800 text-slate-600 hover:text-slate-400'
+                }`}
+                title={soundEnabled ? 'Acoustic Synthesizer ON' : 'Acoustic Synthesizer MUTED'}
+              >
+                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              </button>
+            </>
+          )}
         </div>
       </header>
 
-      {/* Main Workspace Layout */}
-      <main className="flex-1 p-3 max-w-[1600px] w-full mx-auto space-y-3">
+      {activeLabBranch === 'temporal_multiscale' ? (
+        <TemporalMultiscaleChamber />
+      ) : (
+        /* Main Workspace Layout */
+        <main className="flex-1 p-3 max-w-[1600px] w-full mx-auto space-y-3">
         {/* Upper Real-Time Telemetry HUD */}
         <PhysicsHUD telemetry={telemetry} />
+
+        {/* Real-Time WebGPU Compute Performance Dashboard (Collapsible) */}
+        {showGpuDashboard && (
+          <GpuPerformanceDashboard
+            engine={engine}
+            onClose={() => setShowGpuDashboard(false)}
+          />
+        )}
 
         {/* Project Gutenberg Book Trainer & Pattern Extractor (Collapsible) */}
         {showTrainer && (
@@ -364,6 +429,7 @@ export default function App() {
         {/* Lower Deck: Electromagnetic & Quantum Field Modulators */}
         <FieldModulatorPanel engine={engine} onUpdate={() => setTick((t) => t + 1)} />
       </main>
+      )}
 
       {/* Standard Model Scientific Theory Modal */}
       <ParticlePhysicsTheoryModal

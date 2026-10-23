@@ -58,33 +58,44 @@ export const STRONG_BINDING_BIGRAMS = new Set([
 
 export function getLetterParticleProperties(char: string, isAntimatter: boolean = false) {
   const upper = char.toUpperCase();
+  const isUppercaseLetter = char >= 'A' && char <= 'Z';
+  const isLowercaseLetter = char >= 'a' && char <= 'z';
   const isVowel = 'AEIOUY'.includes(upper);
-  const isPunctuation = '!?.#*-+=/\\:;~^'.includes(char);
+  const isSpace = char === ' ';
+  const isPunctuation = '!?.#*-+=/\\:;~^,\'"()[]'.includes(char);
   const isDigit = '0123456789'.includes(char);
 
   let type: ParticleType = 'quark';
   let color: SemanticColor = 'green';
   let mass = 2.0;
   let charge = 1.0;
-  let spin = 0.5;
+  // Spin polarization: +0.5 for Uppercase, -0.5 for Lowercase, 1.0 for Bosons (punctuation/space)
+  let spin = isUppercaseLetter ? 0.5 : isLowercaseLetter ? -0.5 : 1.0;
 
   if (isAntimatter) {
     type = 'antimatter';
     color = 'violet';
     charge = isVowel ? 1.0 : -1.0; // Inverted charge
     mass = 2.2;
+    spin = -spin;
+  } else if (isSpace) {
+    // Vacuum Gluon / Carrier Boson coupling words
+    type = 'boson';
+    color = 'gold';
+    mass = 0.35;
+    charge = 0.0;
+    spin = 1.0;
   } else if (isPunctuation) {
     type = 'boson';
     color = 'gold';
-    mass = 0.5;
-    charge = 0.0;
+    mass = '!?'.includes(char) ? 0.85 : 0.55;
+    charge = '!?'.includes(char) ? 1.5 : ',;:'.includes(char) ? -0.25 : 0.0;
     spin = 1.0;
   } else if (isVowel) {
     type = 'lepton';
     color = 'blue';
-    mass = 1.0; // Vowels are light, agile leptons
+    mass = isUppercaseLetter ? 1.25 : 1.0; // Capital vowels carry 1.25x rest mass
     charge = -1.0; // Negative charge
-    spin = 0.5;
   } else if (isDigit) {
     type = 'quark';
     color = 'gold';
@@ -94,26 +105,27 @@ export function getLetterParticleProperties(char: string, isAntimatter: boolean 
   } else {
     // Consonant quarks
     type = 'quark';
+    const caseMassFactor = isUppercaseLetter ? 1.25 : 1.0;
     // Sub-classification of quarks:
     if ('PTKBDG'.includes(upper)) {
       // Plosive quarks (heavy, high inertia)
       color = 'red';
-      mass = 3.5;
+      mass = 3.5 * caseMassFactor;
       charge = 1.0;
     } else if ('SFVZ'.includes(upper)) {
       // Fricative quarks (active, fast oscillating)
       color = 'green';
-      mass = 1.8;
+      mass = 1.8 * caseMassFactor;
       charge = 0.8;
     } else if ('MN'.includes(upper)) {
       // Nasal quarks (smooth resonance)
       color = 'blue';
-      mass = 2.2;
+      mass = 2.2 * caseMassFactor;
       charge = 0.5;
     } else {
       // Liquids and others (L, R, W, H, J, X, C, Q)
       color = 'red';
-      mass = 2.5;
+      mass = 2.5 * caseMassFactor;
       charge = 1.0;
     }
   }

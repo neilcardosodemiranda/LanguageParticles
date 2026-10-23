@@ -5,7 +5,8 @@
 
 import React from 'react';
 import { NeuromorphicPhysicsEngine } from '../physics/engine';
-import { Sliders, Shield, Zap, Wind, Orbit } from 'lucide-react';
+import { gpuAccelerator } from '../physics/webgpuEngine';
+import { Sliders, Shield, Zap, Wind, Orbit, Cpu } from 'lucide-react';
 
 interface FieldModulatorPanelProps {
   engine: NeuromorphicPhysicsEngine;
@@ -197,6 +198,52 @@ export const FieldModulatorPanel: React.FC<FieldModulatorPanelProps> = ({
             <span>Quantum Tunneling</span>
           </label>
         </div>
+      </div>
+
+      {/* WebGPU Hardware Compute Acceleration Monitor & Control */}
+      <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 bg-slate-950/60 px-3 py-2 rounded border border-slate-800/80">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-1.5">
+            <Cpu className={`w-4 h-4 ${settings.useWebGPU && gpuAccelerator.status.isInitialized ? 'text-cyan-400' : 'text-slate-500'}`} />
+            <span className="font-semibold uppercase tracking-wider text-slate-200 text-[11px]">
+              Compute Core:
+            </span>
+          </div>
+
+          {settings.useWebGPU && gpuAccelerator.status.isInitialized ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950/90 text-cyan-300 border border-cyan-800/60 font-semibold tracking-wide">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                ⚡ WEBGPU ACCELERATED
+              </span>
+              <span className="font-mono text-[10px] text-slate-400">
+                {gpuAccelerator.status.adapterName} • @workgroup(64) • {gpuAccelerator.status.dispatchTimeUs} μs
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/60 text-amber-300 border border-amber-800/50 font-semibold tracking-wide">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                CPU PHYSICS FALLBACK
+              </span>
+              <span className="font-mono text-[10px] text-slate-500">
+                {!settings.useWebGPU ? '(Manual Toggle Disabled)' : gpuAccelerator.status.error || '(GPU Inactive in Browser)'}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <label className="flex items-center gap-2 cursor-pointer bg-slate-900 hover:bg-slate-800 px-2.5 py-1 rounded border border-slate-700/80 transition-colors">
+          <input
+            type="checkbox"
+            checked={settings.useWebGPU}
+            onChange={(e) => handleChange('useWebGPU', e.target.checked)}
+            className="rounded bg-slate-800 border-slate-700 text-cyan-500 focus:ring-0 cursor-pointer"
+          />
+          <span className="text-[11px] font-medium text-slate-200">
+            Enable WebGPU WGSL Compute
+          </span>
+        </label>
       </div>
     </div>
   );

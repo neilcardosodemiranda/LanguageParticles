@@ -54,21 +54,23 @@ export const ColliderCanvas: React.FC<ColliderCanvasProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, [handleResize]);
 
-  // Main 60 FPS Render Loop
+  // Main 60 FPS Render Loop with WebGPU compute synchronization
   useEffect(() => {
     let animId: number;
     let lastTime = performance.now();
+    let isRunning = true;
 
-    const render = (time: number) => {
+    const render = async (time: number) => {
+      if (!isRunning) return;
       const dt = Math.min(2.0, (time - lastTime) / 16.6);
       lastTime = time;
 
-      // Step physics
-      engine.update(dt);
+      // Step physics (WebGPU compute shader pass or CPU fallback)
+      await engine.update(dt);
 
       // Render Canvas
       const canvas = canvasRef.current;
-      if (canvas) {
+      if (canvas && isRunning) {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           const dpr = window.devicePixelRatio || 1;
@@ -79,11 +81,16 @@ export const ColliderCanvas: React.FC<ColliderCanvasProps> = ({
         }
       }
 
-      animId = requestAnimationFrame(render);
+      if (isRunning) {
+        animId = requestAnimationFrame(render);
+      }
     };
 
     animId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(animId);
+    return () => {
+      isRunning = false;
+      cancelAnimationFrame(animId);
+    };
   }, [engine]);
 
   // Rendering routines
