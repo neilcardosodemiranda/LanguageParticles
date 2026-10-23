@@ -170,6 +170,16 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
       if (!mounted) return;
 
       if (restored && wasmCrossbarEngine.totalIngestedTokens > 0) {
+        // Ensure core foundational molecules are present if a previous Gutenberg #35 stream overwrote them
+        const hasFoundationalTimeMachine = wasmCrossbarEngine.molecules.some((m) =>
+          m.focalText.includes('made of nickel, parts of ivory, and crystalline quartz')
+        );
+        if (!hasFoundationalTimeMachine) {
+          for (const doc of CORPORE_DOCUMENTS) {
+            wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
+          }
+          await wasmCrossbarEngine.syncToBinaryMmap();
+        }
         setActiveCapacity(wasmCrossbarEngine.preset);
         setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
         setTelemetry(wasmCrossbarEngine.getTelemetry());
@@ -472,6 +482,10 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const handleTeachCrystalDirectly = () => {
     const q = currentQuery.trim();
     if (!q) return;
+    if (q.endsWith('?') && q.indexOf('?') === q.length - 1) {
+      handleExecuteSynthesis(q);
+      return;
+    }
     const learned = wasmCrossbarEngine.learnFromRealtimeInput(q, true);
     if (learned.summary) {
       setPlasticFeedbackBanner(learned.summary);

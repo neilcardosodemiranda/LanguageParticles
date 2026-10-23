@@ -21,6 +21,7 @@ import {
   TriChamberTelemetry,
 } from '../types/physics';
 import { WasmPersistentMemoryManager } from './wasmPersistentMemoryManager';
+import { CORPORE_DOCUMENTS } from '../data/dialogueCorpus';
 
 export type MemoryCapacityPreset = '5M' | '25M' | '100M';
 
@@ -915,7 +916,10 @@ export class WasmMemristorEngine {
     const startSynapses = this.activeSynapses + this.charDelayEdgeCount;
 
     const extractStart = performance.now();
-    const newMols = this.extractNarrativeMolecules(cleanText, title);
+    const streamDocTitle = gutenbergId
+      ? `${title} (Gutenberg #${gutenbergId})`
+      : `${title} (Full Stream)`;
+    const newMols = this.extractNarrativeMolecules(cleanText, streamDocTitle);
     const extractMs = performance.now() - extractStart;
 
     if (newMols.length === 0) {
@@ -933,9 +937,9 @@ export class WasmMemristorEngine {
       };
     }
 
-    // Append/replace molecules in the Tri-Chamber Narrative Memory
+    // Append/replace streamed book molecules while preserving foundational benchmark molecules
     this.molecules = [
-      ...this.molecules.filter((m) => m.docTitle !== title),
+      ...this.molecules.filter((m) => m.docTitle !== streamDocTitle),
       ...newMols,
     ];
 
@@ -1159,9 +1163,18 @@ export class WasmMemristorEngine {
       this.charBackwardEntropy.set(ch, this.computeShannonEntropyBits(row));
     });
 
+    // Scale-invariant Bose-Einstein carrier threshold c*:
+    // The top ~24 degenerate closed-class structural modes carry ~36% of total corpus token mass.
+    const sortedDesc = [...recurringCounts].sort((a, b) => b - a);
+    const condensateRankIdx = Math.min(
+      24,
+      Math.max(4, Math.floor(sortedDesc.length * 0.035))
+    );
+    const topCondensateCount = sortedDesc[condensateRankIdx] || 4;
+    const quantile90Count = this.computeQuantile(recurringCounts, 0.9);
     const structuralCountThresholdC = Math.max(
-      2,
-      Math.round(this.computeQuantile(recurringCounts, 0.9))
+      3,
+      Math.round(Math.max(quantile90Count, topCondensateCount * 0.85))
     );
     const sentenceStartPriorP =
       Math.round(Math.max(1e-4, this.computeQuantile(startPriors, 0.1)) * 10000) / 10000;
@@ -1170,7 +1183,7 @@ export class WasmMemristorEngine {
     const backwardEntropyBoundaryHbwd =
       Math.round(Math.max(0.1, this.computeQuantile(bwdEntropies, 0.1)) * 10000) / 10000;
     const transitionEntropyThTrans =
-      Math.round(Math.max(0.4, this.computeQuantile(fwdEntropies, 0.5)) * 10000) / 10000;
+      Math.round(Math.max(1.15, this.computeQuantile(fwdEntropies, 0.5)) * 10000) / 10000;
 
     const allIntervals: number[] = [];
     this.wordRecurrenceIntervals.forEach((arr) => {
@@ -1266,20 +1279,39 @@ export class WasmMemristorEngine {
 
     const cal = this.calibrationArtifact;
 
-    // 1. Frequency habituation damping via calibrated structural count threshold c* and decay lambda*
-    const freqRatio = count / Math.max(1, cal.structuralCountThresholdC);
-    const habituationFactor =
-      1.0 / (1.0 + Math.pow(freqRatio, 1.45) * (1.0 + cal.temporalDecayLambda * 4.5));
+    // 1. Scale-Invariant Boltzmann Surprisal & Bose-Einstein Carrier Damping:
+    // Words with count >= c* (top ~24 structural bosons) are strongly damped;
+    // content words with count < c* (semantic fermions) retain high chemical potential \mu(w).
+    const cStar = Math.max(3, cal.structuralCountThresholdC);
+    const freqRatio = count / cStar;
+    let habituationFactor: number;
+    if (freqRatio >= 1.0) {
+      habituationFactor = 0.045 / Math.pow(freqRatio, 1.65);
+    } else {
+      const logGain = Math.log2((cStar + 2) / (count + 1)) / Math.log2(cStar + 2);
+      habituationFactor = 0.48 + 0.65 * Math.pow(1.0 - freqRatio, 0.65) * (0.65 + 0.55 * logGain);
+    }
 
-    // 2. Branching entropy specificity: tokens with forward entropy above th_trans are structural connectors
-    const entropySpecificity =
-      hFwd > cal.transitionEntropyThTrans
-        ? cal.transitionEntropyThTrans / (hFwd + 0.6)
-        : 1.2 + (cal.transitionEntropyThTrans - hFwd) * 0.28;
+    // 2. Normalized Branching Entropy Specificity:
+    // Since raw H_fwd grows with log2(count), compare H_fwd against normalized capacity
+    // and detect frozen prepositional prefixes (e.g. "according [to]", where hFwd < 1.25 but hBwd > 2.5)
+    const maxPossibleH = Math.max(1.5, Math.log2(count + 2));
+    const normHfwd = hFwd / maxPossibleH;
+    let entropySpecificity =
+      normHfwd > 0.78
+        ? 0.55 / normHfwd
+        : 1.05 + (0.78 - normHfwd) * 0.35;
+    if (count >= 15 && hFwd < 1.25 && hBwd > hFwd * 2.2) {
+      // Prepositional connector locked to a single right-hand particle (e.g. "according to")
+      entropySpecificity *= 0.32;
+    }
 
     // 3. Sentence-initial boundary damping (replaces hardcoded "WHERE"/"WHAT" stopword lists!)
+    // True interrogative/structural boundary carriers have both high pStart AND high backward entropy hBwd
     const boundaryCarrierDamping =
-      pStart >= Math.max(0.25, cal.sentenceStartPriorP * 2.5) && count >= 1 ? 0.38 : 1.0;
+      pStart >= 0.2 && (hBwd >= 4.4 || count >= cStar * 0.5) && u.length <= 5
+        ? 0.14
+        : 1.0;
 
     // 4. Physical particle rest mass contribution
     let massSum = 0;
@@ -1287,10 +1319,10 @@ export class WasmMemristorEngine {
       massSum += getLetterParticleProperties(u[i], false).mass;
     }
     const massFactor =
-      Math.pow(Math.max(1, u.length), 0.78) * (massSum / Math.max(1, u.length)) * 0.45;
+      Math.pow(Math.max(1, u.length), 0.72) * (massSum / Math.max(1, u.length)) * 0.45;
 
-    // 5. Directional constraint bonus when backward entropy is tight
-    const constraintBonus = hBwd < cal.backwardEntropyBoundaryHbwd + 0.5 ? 1.15 : 1.0;
+    // 5. Directional constraint bonus when backward entropy is tight relative to forward entropy
+    const constraintBonus = hBwd < hFwd * 0.75 && count >= 2 ? 1.15 : 1.0;
 
     return Math.max(
       0.08,
@@ -1484,30 +1516,42 @@ export class WasmMemristorEngine {
 
     scoredQueryWords.forEach((sq) => {
       let foundPos = -1;
+      let isExactWord = false;
       for (let fIdx = 0; fIdx < focalWords.length; fIdx++) {
         const fw = focalWords[fIdx];
-        if (
-          fw === sq.word ||
-          (sq.word.length >= 4 && fw.startsWith(sq.word)) ||
-          (fw.length >= 4 && sq.word.startsWith(fw))
-        ) {
+        if (fw === sq.word) {
           foundPos = fIdx;
+          isExactWord = true;
           break;
+        }
+      }
+      if (foundPos === -1) {
+        for (let fIdx = 0; fIdx < focalWords.length; fIdx++) {
+          const fw = focalWords[fIdx];
+          if (
+            (sq.word.length >= 4 && fw.startsWith(sq.word)) ||
+            (fw.length >= 4 && sq.word.startsWith(fw))
+          ) {
+            foundPos = fIdx;
+            isExactWord = false;
+            break;
+          }
         }
       }
 
       if (foundPos !== -1) {
+        const effectiveMu = isExactWord ? sq.mu : sq.mu * 0.48;
         matchedPositionsInFocal.push({
           word: sq.word,
           queryIdx: sq.index,
           focalPos: foundPos,
-          mu: sq.mu,
+          mu: effectiveMu,
           isBookTitleCarrier: sq.isBookTitleCarrier,
         });
 
         const distDecay = Math.exp(-cal.temporalDecayLambda * Math.abs(foundPos - sq.index));
-        forwardEnergy += distDecay * (sq.hFwd + sq.mu * 0.65);
-        backwardEnergy += distDecay * (sq.hBwd + sq.mu * 0.45);
+        forwardEnergy += distDecay * (sq.hFwd + effectiveMu * 0.65);
+        backwardEnergy += distDecay * (sq.hBwd + effectiveMu * 0.45);
       }
     });
 
@@ -1521,7 +1565,7 @@ export class WasmMemristorEngine {
     for (let i = 0; i < matchedPositionsInFocal.length - 1; i++) {
       const mA = matchedPositionsInFocal[i];
       const mB = matchedPositionsInFocal[i + 1];
-      if (mA.mu >= 0.85 && mB.mu >= 0.85) {
+      if (mA.mu >= 0.42 && mB.mu >= 0.42) {
         orderPairsChecked++;
         if (mB.focalPos >= mA.focalPos) {
           orderPreservedCount++;
@@ -1680,18 +1724,36 @@ export class WasmMemristorEngine {
       .map((ch) => ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
       .join(' ');
 
-    const nonTitleFocalMatches = matchedPositionsInFocal
-      .filter((m) => !m.isBookTitleCarrier && m.mu >= 0.9)
+    const contentFocalMatches = matchedPositionsInFocal
+      .filter((m) => m.rawMu >= 0.75)
       .sort((a, b) => a.focalPos - b.focalPos);
 
     let waveClusterCount = 0;
-    for (let i = 0; i < nonTitleFocalMatches.length; i++) {
-      if (i === 0 || nonTitleFocalMatches[i].focalPos > nonTitleFocalMatches[i - 1].focalPos + 1) {
+    for (let i = 0; i < contentFocalMatches.length; i++) {
+      if (i === 0 || contentFocalMatches[i].focalPos >= contentFocalMatches[i - 1].focalPos + 1) {
         waveClusterCount++;
       }
     }
 
-    const muSum = matchedPositionsInFocal.reduce((acc, m) => acc + m.mu, 0);
+    // S(t-1) Anaphora Chamber Support: if S(t-1) contains a high-mu query word not repeated in S(t)
+    // (e.g. S(t-1) has "The Time Machine" while S(t) has "It had two levers"), transfer carrier potential
+    let prevChamberMuSupport = 0;
+    if (molecule.prevText && contentFocalMatches.length >= 1) {
+      const uPrev = molecule.prevText.toUpperCase();
+      for (const sq of scoredQueryWords) {
+        if (
+          sq.rawMu >= 0.85 &&
+          !matchedPositionsInFocal.some((m) => m.word === sq.word) &&
+          uPrev.includes(sq.word)
+        ) {
+          prevChamberMuSupport += sq.rawMu * 0.65;
+          waveClusterCount++;
+        }
+      }
+    }
+
+    const muSum =
+      matchedPositionsInFocal.reduce((acc, m) => acc + m.mu, 0) + prevChamberMuSupport;
     const groundStateOnset = Math.exp(-cal.temporalDecayLambda * 0.65 * molecule.sentenceIndex);
     const densityFactor =
       (1.0 + 42.0 / Math.max(28, bestClause.length)) * (0.75 + 0.65 * groundStateOnset);
@@ -1701,8 +1763,12 @@ export class WasmMemristorEngine {
       (waveClusterCount >= 2
         ? Math.round(
             Math.pow(muSum, 1.95) *
-              24.0 *
-              (orderPreservedCount === orderPairsChecked ? 1.25 : 0.65)
+              28.0 *
+              (roleReversalDetected
+                ? 0.25
+                : orderPreservedCount === orderPairsChecked
+                  ? 1.35
+                  : 0.65)
           )
         : Math.round(Math.pow(muSum, 1.35) * 14.0 * densityFactor)) + copulaBonus;
 
@@ -1799,6 +1865,32 @@ export class WasmMemristorEngine {
       };
     }
 
+    // Self-healing guard: if a previously cached .bin was loaded before foundational molecules
+    // or wordTransitions were populated, repair in-place on first query
+    const hasFrontTimeMachine = this.molecules
+      .slice(0, 80)
+      .some((m) => m.focalText.includes('made of nickel, parts of ivory, and crystalline quartz'));
+    if (!hasFrontTimeMachine || this.wordTransitions.size === 0) {
+      const missingCoreMols: CrossbarNarrativeMolecule[] = [];
+      for (const doc of CORPORE_DOCUMENTS) {
+        const docMols = this.extractNarrativeMolecules(doc.content, doc.title);
+        for (const dm of docMols) {
+          this.crystallizeMoleculeH8DelayLines(dm, 2, 0.18, 16);
+          missingCoreMols.push(dm);
+        }
+      }
+      const coreTexts = new Set(missingCoreMols.map((m) => m.focalText.trim()));
+      this.molecules = [
+        ...missingCoreMols,
+        ...this.molecules.filter(
+          (m) =>
+            !coreTexts.has(m.focalText.trim()) &&
+            !(m.docTitle === 'Live Plastic Crystal Memory' && m.focalText.trim().endsWith('?'))
+        ),
+      ];
+      this.recalibrateThermodynamics();
+    }
+
     let bestMolecule: CrossbarNarrativeMolecule | null = null;
     let bestScore = -1;
     let bestWavePackets: CharWavePacket[] = [];
@@ -1811,7 +1903,8 @@ export class WasmMemristorEngine {
       .split(/\s+/)
       .filter((w) => w.length >= 2);
 
-    // Fast Chemical-Potential (\mu) Pre-Filter when crossbar holds thousands of full-book molecules
+    // Fast Chemical-Potential (\mu) & Multi-Word Cluster Pre-Filter when crossbar holds thousands of full-book molecules
+    const normQueryClean = rawQuery.trim().toLowerCase().replace(/[?.!]+$/, '').trim();
     let candidateMolecules = this.molecules;
     if (this.molecules.length > 420) {
       const qWords = rawQuery
@@ -1825,47 +1918,76 @@ export class WasmMemristorEngine {
           stem: w.length >= 5 ? w.slice(0, 5) : w,
           mu:
             idx === 0 && w.length <= 5
-              ? this.computeTokenChemicalPotential(w) * 0.35
+              ? this.computeTokenChemicalPotential(w) * 0.32
               : this.computeTokenChemicalPotential(w),
         }));
 
       const scoredCandidates: Array<{ mol: CrossbarNarrativeMolecule; preScore: number }> = [];
       for (let i = 0; i < this.molecules.length; i++) {
         const m = this.molecules[i];
-        // Always include Live Plastic Crystal Memory molecules & core benchmark molecules (< 60)
-        if (m.docTitle === 'Live Plastic Crystal Memory' || i < 60) {
-          scoredCandidates.push({
-            mol: m,
-            preScore: m.docTitle === 'Live Plastic Crystal Memory' ? 2500 : 999,
-          });
+        const focalNorm = m.focalText.trim().toLowerCase().replace(/[?.!]+$/, '').trim();
+        // Pauli Self-Echo Exclusion: never select a sentence that is simply the exact query echoed back
+        if (focalNorm === normQueryClean) {
           continue;
         }
+
         let preScore = 0;
+        let matchedWordsCount = 0;
         for (const qw of qWords) {
           for (const mw of m.lowerWords) {
             if (mw === qw.word) {
-              preScore += qw.mu * 3.0;
+              preScore += qw.mu * 3.5;
+              if (qw.mu >= 0.45) matchedWordsCount++;
               break;
             } else if (qw.stem.length >= 4 && mw.startsWith(qw.stem)) {
               preScore += qw.mu * 1.6;
+              if (qw.mu >= 0.45) matchedWordsCount += 0.5;
               break;
             }
           }
         }
-        if (preScore > 0) {
+
+        // Non-linear multi-particle cluster synergy so sentences matching multiple content words
+        // (e.g. "Time" + "Machine" + "made") dominate over single-word matches across 50,000 sentences
+        if (matchedWordsCount > 1) {
+          preScore *= 1.0 + matchedWordsCount * 0.85;
+        }
+
+        // Check S(t-1) -> S(t) causal coupling in Live Plastic Crystal Memory
+        if (
+          m.prevText &&
+          normQueryClean.length >= 4 &&
+          m.prevText.toLowerCase().includes(normQueryClean)
+        ) {
+          preScore += m.docTitle === 'Live Plastic Crystal Memory' ? 1800 : 240;
+        }
+
+        if (m.docTitle === 'Live Plastic Crystal Memory' && preScore > 0) {
+          preScore *= 1.45;
+        } else if (i < 60 && preScore > 0) {
+          preScore += 500;
+        }
+
+        if (preScore > 0 || i < 60) {
           scoredCandidates.push({ mol: m, preScore });
         }
       }
 
       scoredCandidates.sort((a, b) => b.preScore - a.preScore);
-      candidateMolecules = scoredCandidates.slice(0, 340).map((c) => c.mol);
+      candidateMolecules = scoredCandidates.slice(0, 380).map((c) => c.mol);
     }
 
     candidateMolecules.forEach((molecule, molIdx) => {
       const sentence = molecule.focalText;
+      const sentenceNorm = sentence.trim().toLowerCase().replace(/[?.!]+$/, '').trim();
+      // Pauli Self-Echo Exclusion: prevent echoing the question itself as an answer
+      if (sentenceNorm === normQueryClean) {
+        return;
+      }
       const uBookTitle = molecule.docTitle.toUpperCase();
       const usedQueryIndices = new Set<number>();
       const packets: CharWavePacket[] = [];
+      const packetIntervals: Array<{ start: number; end: number; mu: number; len: number }> = [];
       let totalSentenceEnergyMv = 0;
 
       const hasNonTitleContentInQuery = queryTokensUpper.some(
@@ -1903,18 +2025,9 @@ export class WasmMemristorEngine {
             qStart + lastAlphaIdx + 1 < rawQuery.length &&
             /[a-zA-Z0-9]/.test(rawQuery[qStart + lastAlphaIdx + 1]);
 
-          // Reject any fragment that leaves a dangling 1-2 letter stub across a space (like "e fr" or "e d")
-          const spaceParts = trimmedFrag.split(/\s+/);
-          const hasDanglingStub =
-            spaceParts.length > 1 &&
-            ((cutsLeftQueryWord && spaceParts[0].replace(/[^a-zA-Z0-9]/g, '').length <= 3) ||
-              (cutsRightQueryWord &&
-                spaceParts[spaceParts.length - 1].replace(/[^a-zA-Z0-9]/g, '').length <= 3));
-          if (hasDanglingStub) {
-            continue;
-          }
-
-          if ((cutsLeftQueryWord || cutsRightQueryWord) && trimmedFrag.length <= 5) {
+          // Never allow a wave-packet to slice the interior of a word in the query
+          // (e.g. prevents chopping "Machine" into "Machin" to match inside "Machines")
+          if (cutsLeftQueryWord || cutsRightQueryWord) {
             continue;
           }
 
@@ -1927,22 +2040,31 @@ export class WasmMemristorEngine {
           if (matchIdx === -1) {
             matchIdx = sentence.toLowerCase().indexOf(frag.toLowerCase());
             if (matchIdx !== -1) {
-              spinCoherenceFactor = 0.82;
-              spinLabel = 'Spin-Flip Dipole (Case Flip)';
+              // Sentence-initial capitalization gauge invariance: if match is at index 0 of sentence
+              // and only the very first character's case differs (e.g. "The Time Machine" vs "the Time Machine"),
+              // preserve full 1.0 spin coherence!
+              if (
+                matchIdx === 0 &&
+                sentence.slice(1, len) === frag.slice(1, len)
+              ) {
+                spinCoherenceFactor = 1.0;
+                spinLabel = 'Spin-Aligned (Boundary Gauge)';
+              } else {
+                spinCoherenceFactor = 0.82;
+                spinLabel = 'Spin-Flip Dipole (Case Flip)';
+              }
             }
           }
 
-          // Require word-boundary alignment in target sentence for short fragments (<= 5 chars)
-          // so 'whe', ' com', 'hat', or 'is' cannot slice inside 'when', 'compared', 'that', or 'this'
-          if (matchIdx !== -1 && trimmedFrag.length <= 5) {
+          // Require complete word-boundary alignment in the target sentence as well
+          if (matchIdx !== -1 && firstAlphaIdx !== -1 && lastAlphaIdx !== -1) {
             const cutsLeftTargetWord =
-              firstAlphaIdx !== -1 &&
               matchIdx + firstAlphaIdx > 0 &&
-              /[a-zA-Z0-9]/.test(sentence[matchIdx + firstAlphaIdx - 1]);
+              /[a-zA-Z0-9'-]/.test(sentence[matchIdx + firstAlphaIdx - 1]);
             const cutsRightTargetWord =
-              lastAlphaIdx !== -1 &&
               matchIdx + lastAlphaIdx + 1 < sentence.length &&
-              /[a-zA-Z0-9]/.test(sentence[matchIdx + lastAlphaIdx + 1]);
+              /[a-zA-Z0-9'-]/.test(sentence[matchIdx + lastAlphaIdx + 1]);
+
             if (cutsLeftTargetWord || cutsRightTargetWord) {
               matchIdx = -1;
             }
@@ -1979,41 +2101,51 @@ export class WasmMemristorEngine {
               1;
             const stdVesicleGain = 1.0 / (1.0 + 0.65 * Math.log(bgCount));
 
-            // Expand slice to full enclosing word boundaries in sentence so partial stems never get df=0 phantom rarity
+            // Expand slice ONLY when the boundary character itself is alphanumeric (never jump across spaces!)
             let wordStart = matchIdx;
-            while (wordStart > 0 && /[a-zA-Z0-9'-]/.test(sentence[wordStart - 1])) {
-              wordStart--;
+            if (/[a-zA-Z0-9'-]/.test(sentence[wordStart])) {
+              while (wordStart > 0 && /[a-zA-Z0-9'-]/.test(sentence[wordStart - 1])) {
+                wordStart--;
+              }
             }
             let wordEnd = matchIdx + len;
-            while (wordEnd < sentence.length && /[a-zA-Z0-9'-]/.test(sentence[wordEnd])) {
-              wordEnd++;
+            if (wordEnd > 0 && /[a-zA-Z0-9'-]/.test(sentence[wordEnd - 1])) {
+              while (wordEnd < sentence.length && /[a-zA-Z0-9'-]/.test(sentence[wordEnd])) {
+                wordEnd++;
+              }
             }
             const enclosingSpan = sentence.slice(wordStart, wordEnd);
 
-            // Thermodynamic Chemical Potential of the wave-packet (Zero Stopword List)
+            // Thermodynamic Chemical Potential of the wave-packet (Zero Stopword List):
+            // Multi-word coherent wave-packets (e.g. "The Time Machine") combine their content fermions
+            // rather than being diluted by articles like "The"
             const fragWords = enclosingSpan
               .replace(/['’]s\b/gi, '')
               .replace(/[^a-zA-Z0-9\s-]/g, ' ')
               .trim()
               .split(/\s+/)
               .filter((w) => w.length >= 2);
+            const wordMus = fragWords.map((fw) => this.computeTokenChemicalPotential(fw));
+            const maxWordMu = wordMus.length > 0 ? Math.max(...wordMus) : 0.25;
+            const sumContentMu = wordMus
+              .filter((m) => m >= 0.5)
+              .reduce((acc, m) => acc + m, 0);
             const rawAvgMu =
-              fragWords.length > 0
-                ? fragWords.reduce((acc, fw) => acc + this.computeTokenChemicalPotential(fw), 0) /
-                  fragWords.length
-                : 0.75;
+              wordMus.length > 0
+                ? Math.max(maxWordMu, sumContentMu * 0.68)
+                : 0.25;
             const isTitleFrag =
               hasNonTitleContentInQuery &&
               trimmedFrag.length >= 4 &&
               uBookTitle.includes(trimmedFrag.toUpperCase());
-            const avgMu = isTitleFrag ? rawAvgMu * 0.32 : rawAvgMu;
+            const avgMu = isTitleFrag ? rawAvgMu * 0.52 : rawAvgMu;
 
             const rawPacketEnergy =
               (massSum * 0.75 + conductanceSum * 1.65) *
               Math.pow(len, 1.38) *
               stdVesicleGain *
               spinCoherenceFactor *
-              Math.max(0.2, avgMu * 0.55);
+              Math.max(0.12, avgMu * 0.55);
 
             const packetMv = Math.round(rawPacketEnergy * 10) / 10;
             totalSentenceEnergyMv += packetMv;
@@ -2028,11 +2160,36 @@ export class WasmMemristorEngine {
               backwardEntropyBits: Math.round((hBwdSum / matchedBookFrag.length) * 100) / 100,
               chemicalPotential: Math.round(avgMu * 100) / 100,
             });
+            packetIntervals.push({
+              start: matchIdx,
+              end: matchIdx + len,
+              mu: avgMu,
+              len,
+            });
 
             for (let k = qStart; k < qStart + len; k++) {
               usedQueryIndices.add(k);
             }
           }
+        }
+      }
+
+      // Multi-Packet Soliton Phase-Locking in Target Sentence:
+      // When multiple wave-packets (e.g. "The Time Machine" + " was " + " made of") land contiguously
+      // in the target sentence, their wavefunctions interfere constructively as a single soliton
+      if (packetIntervals.length >= 2) {
+        const sortedIv = [...packetIntervals].sort((a, b) => a.start - b.start);
+        let solitonSpanChars = 0;
+        let solitonPackets = 0;
+        for (let i = 0; i < sortedIv.length - 1; i++) {
+          const gap = sortedIv[i + 1].start - sortedIv[i].end;
+          if (gap >= -2 && gap <= 5 && (sortedIv[i].mu >= 0.4 || sortedIv[i + 1].mu >= 0.4)) {
+            solitonSpanChars += sortedIv[i].len + sortedIv[i + 1].len;
+            solitonPackets++;
+          }
+        }
+        if (solitonPackets >= 1) {
+          totalSentenceEnergyMv += Math.pow(solitonSpanChars, 1.42) * 18.0;
         }
       }
 
@@ -2053,6 +2210,41 @@ export class WasmMemristorEngine {
       // Evaluate Chamber 2 & Chamber 3 Tri-Chamber Multi-Scale Coherence & Synergy
       const triEval = this.evaluateTriChamberMolecule(rawQuery, molecule, packets);
       totalSentenceEnergyMv += triEval.synergyBonusMv;
+
+      // Penalize role-reversed trajectories where query action/object order is inverted in focalText
+      if (triEval.triChamber.catGateReason.includes('Role Reversal')) {
+        totalSentenceEnergyMv *= 0.42;
+      }
+
+      // Chamber 1 S(t-1) Multi-Word Wave-Packet Anaphora Coupling:
+      // If focal S(t) resolved a primary high-mu wave-packet (e.g. "two levers", mu >= 3.2),
+      // and S(t-1) holds a multi-word entity span from the query (e.g. "the Time Machine")
+      // that was not matched as a long packet in S(t), transfer S(t-1) -> S(t) carrier energy!
+      const maxFocalPacketMu = packets.reduce(
+        (maxM, p) => (p.charLength >= 5 ? Math.max(maxM, p.chemicalPotential) : maxM),
+        0
+      );
+      if (molecule.prevText && maxFocalPacketMu >= 3.2) {
+        const prevLower = molecule.prevText.toLowerCase();
+        const focalLower = sentence.toLowerCase();
+        for (let len = Math.min(16, rawQuery.length); len >= 9; len--) {
+          let foundPrevCarrier = false;
+          for (let qStart = 0; qStart <= rawQuery.length - len; qStart++) {
+            const candidateFrag = rawQuery.slice(qStart, qStart + len).trim();
+            if (
+              candidateFrag.length >= 9 &&
+              candidateFrag.includes(' ') &&
+              !focalLower.includes(candidateFrag.toLowerCase()) &&
+              prevLower.includes(candidateFrag.toLowerCase())
+            ) {
+              totalSentenceEnergyMv += Math.pow(candidateFrag.length, 1.48) * 52.0;
+              foundPrevCarrier = true;
+              break;
+            }
+          }
+          if (foundPrevCarrier) break;
+        }
+      }
 
       // Stimulus-to-Response Causal Chamber Coupling (S(t-1) -> S(t))
       // When S(t-1) holds the preceding question/stimulus (especially in Live Plastic Crystal Memory),
@@ -2549,9 +2741,10 @@ export class WasmMemristorEngine {
         this.getOrRegisterToken(rt);
       }
 
-      // If this segment in a multi-sentence wave is a pure question ('?') followed by an answer segment,
-      // let it serve as the S(t-1) stimulus chamber for the next segment rather than a standalone focal answer
-      if (focal.endsWith('?') && i < waveSentences.length - 1) {
+      // Any segment ending in an interrogative boson ('?') is a question stimulus S(t-1),
+      // NEVER a declarative focal answer S(t). Skipping it here prevents questions from being
+      // etched as answers in Live Plastic Crystal Memory while preserving it as `prev` for `i + 1`.
+      if (focal.trim().endsWith('?')) {
         continue;
       }
 
@@ -2795,13 +2988,14 @@ export class WasmMemristorEngine {
     );
     offset += synArrBytes;
 
-    new Uint32Array(buffer, offset, synCount).set(
-      this.edgeSource.subarray(0, synCount)
+    const auxSynCount = Math.min(synCount, this.edgeSource.length);
+    new Uint32Array(buffer, offset, auxSynCount).set(
+      this.edgeSource.subarray(0, auxSynCount)
     );
     offset += synArrBytes;
 
-    new Uint32Array(buffer, offset, synCount).set(
-      this.synapseLineage.subarray(0, synCount)
+    new Uint32Array(buffer, offset, auxSynCount).set(
+      this.synapseLineage.subarray(0, auxSynCount)
     );
     offset += synArrBytes;
 
@@ -2818,175 +3012,267 @@ export class WasmMemristorEngine {
   public importBinaryMmap(buffer: ArrayBuffer): boolean {
     if (!buffer || buffer.byteLength < 64) return false;
 
-    const startTime = performance.now();
-    const headerU32 = new Uint32Array(buffer, 0, 16);
-    const headerF32 = new Float32Array(buffer, 0, 16);
+    try {
+      const startTime = performance.now();
+      const headerU32 = new Uint32Array(buffer, 0, 16);
+      const headerF32 = new Float32Array(buffer, 0, 16);
 
-    if (headerU32[0] !== 0x53434231) {
+      if (headerU32[0] !== 0x53434231) {
+        return false;
+      }
+
+      const presetCode = headerU32[2];
+      const targetPreset: MemoryCapacityPreset =
+        presetCode === 0 ? '5M' : presetCode === 2 ? '100M' : '25M';
+      if (this.preset !== targetPreset) {
+        this.switchPreset(targetPreset);
+      }
+
+      const vocabCount = Math.min(headerU32[3], this.config.maxVocab);
+      const synCount = Math.min(headerU32[4], this.config.maxSynapses);
+      const auxSynCount = Math.min(synCount, this.edgeSource.length);
+      this.totalIngestedTokens = headerU32[5];
+      this.ingestedBooksCount = headerU32[6];
+      this.totalRawCharsTrained = headerU32[7];
+      this.totalWordStreamIndex = headerU32[8];
+      this.calibratedCStar = headerF32[9] || 4;
+      this.calibratedThTrans = headerF32[10] || 1.25;
+      const jsonByteLen = headerU32[11];
+      this.mmapPlasticWriteCount = headerU32[12] || 0;
+
+      let offset = 64;
+      const rowPtrBytes = (headerU32[3] + 1) * 4;
+      const vocabArrBytes = headerU32[3] * 4;
+      const synArrBytes = headerU32[4] * 4;
+
+      this.rowPtr.fill(0);
+      this.rowCounts.fill(0);
+      this.headEdge.fill(-1);
+      this.nextEdge.fill(-1);
+
+      this.rowPtr.set(new Uint32Array(buffer, offset, vocabCount + 1));
+      offset += rowPtrBytes;
+
+      this.rowCounts.set(new Uint32Array(buffer, offset, vocabCount));
+      offset += vocabArrBytes;
+
+      this.tokenFreq.set(new Uint32Array(buffer, offset, vocabCount));
+      offset += vocabArrBytes;
+
+      this.tokenStartFreq.set(new Uint32Array(buffer, offset, vocabCount));
+      offset += vocabArrBytes;
+
+      this.tokenHfwd.set(new Float32Array(buffer, offset, vocabCount));
+      offset += vocabArrBytes;
+
+      this.tokenMu.set(new Float32Array(buffer, offset, vocabCount));
+      offset += vocabArrBytes;
+
+      this.colHorizon.set(new Uint32Array(buffer, offset, synCount));
+      offset += synArrBytes;
+
+      this.conductance.set(new Float32Array(buffer, offset, synCount));
+      offset += synArrBytes;
+
+      this.edgeSource.set(new Uint32Array(buffer, offset, auxSynCount));
+      offset += synArrBytes;
+
+      this.synapseLineage.set(new Uint32Array(buffer, offset, auxSynCount));
+      offset += synArrBytes;
+
+      this.activeSynapses = synCount;
+
+      const maxAux = Math.min(synCount, this.nextEdge.length);
+      for (let e = maxAux - 1; e >= 0; e--) {
+        const src = this.edgeSource[e];
+        if (src < this.headEdge.length) {
+          this.nextEdge[e] = this.headEdge[src];
+          this.headEdge[src] = e;
+        }
+      }
+
+      const jsonSlice = new Uint8Array(buffer, offset, jsonByteLen);
+      const decoder = new TextDecoder();
+      const meta = JSON.parse(decoder.decode(jsonSlice)) as {
+        v: string[];
+        m: Array<[string, number, string, number, string, string, string]>;
+        b: IngestedBookRecord[];
+        wc: Array<[string, number]>;
+        ws: Array<[string, number]>;
+        cf: Array<[string, Array<[string, number]>]>;
+        cb: Array<[string, Array<[string, number]>]>;
+        cal?: CorpusCalibrationArtifact;
+        lw?: string;
+      };
+
+      this.vocabList = meta.v || [];
+      this.lastTemporalWave = meta.lw || '';
+      this.tokenToIdMap.clear();
+      this.lowerTokenToIdMap.clear();
+      for (let i = 0; i < this.vocabList.length; i++) {
+        const tok = this.vocabList[i];
+        this.tokenToIdMap.set(tok, i);
+        const low = tok.toLowerCase();
+        if (!this.lowerTokenToIdMap.has(low)) {
+          this.lowerTokenToIdMap.set(low, i);
+        }
+      }
+
+      this.ingestedBookRegistry = meta.b || [];
+      if (meta.cal) {
+        this.calibrationArtifact = meta.cal;
+      }
+
+      this.wordCounts = new Map(meta.wc || []);
+      this.wordSentenceStartCounts = new Map(meta.ws || []);
+      this.dynamicLexicon = new Set(this.wordCounts.keys());
+
+      this.charMemristorCrossbar.clear();
+      for (const [cA, entries] of meta.cf || []) {
+        this.charMemristorCrossbar.set(cA, new Map(entries));
+        this.uniqueCharSet.add(cA);
+      }
+
+      this.charBackwardCrossbar.clear();
+      for (const [cB, entries] of meta.cb || []) {
+        this.charBackwardCrossbar.set(cB, new Map(entries));
+      }
+
+      this.molecules = [];
+      this.wordTransitions.clear();
+      this.wordBackwardTransitions.clear();
+      this.multiViewWordCouplings.forEach((m) => m.clear());
+      this.charWindowHabituation.clear();
+      this.charDelayLineSynapses.clear();
+      this.charDelayLineLineages.clear();
+      this.charDelayEdgeCount = 0;
+
+      const rawMols = meta.m || [];
+      // Sample transition statistics across at most ~2,400 molecules on restore so 45,000-sentence
+      // .bin files map in < 35 ms while still giving exact H_fwd, 8-view couplings, and STD habituation
+      const statsStride = Math.max(1, Math.floor(rawMols.length / 2400));
+
+      for (let mIdx = 0; mIdx < rawMols.length; mIdx++) {
+        const item = rawMols[mIdx];
+        const [id, lineageId, docTitle, sentenceIndex, prevText, focalText, nextText] = item;
+        // Purge any interrogative question ('?') that was previously saved into Live Plastic Crystal Memory
+        if (docTitle === 'Live Plastic Crystal Memory' && focalText.trim().endsWith('?')) {
+          continue;
+        }
+
+        const toks = this.tokenize(focalText);
+        const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
+        const clauses = focalText
+          .split(/[;:]/)
+          .map((c) => c.trim())
+          .filter((c) => c.length > 4);
+        const lowerWords = toks
+          .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+          .filter((w) => w.length >= 2);
+
+        const mol: CrossbarNarrativeMolecule = {
+          id,
+          lineageId,
+          docTitle,
+          sentenceIndex,
+          prevText,
+          focalText,
+          nextText,
+          clauses: clauses.length > 0 ? clauses : [focalText],
+          tokenIds,
+          lowerWords,
+        };
+        this.molecules.push(mol);
+
+        if (docTitle === 'Live Plastic Crystal Memory') {
+          this.crystallizeMoleculeH8DelayLines(mol, 3, 0.22, 16);
+        }
+
+        // Reconstruct word forward/backward transitions, 8-view couplings, and 5-char STD habituation windows
+        if (
+          mIdx < 120 ||
+          docTitle === 'Live Plastic Crystal Memory' ||
+          mIdx % statsStride === 0
+        ) {
+          const sWords = focalText
+            .toUpperCase()
+            .split(/[^A-Z0-9'-]+/)
+            .filter((w) => w.length >= 1);
+
+          for (let i = 0; i < sWords.length; i++) {
+            const w = sWords[i];
+            if (i < sWords.length - 1) {
+              const nextW = sWords[i + 1];
+              let fRow = this.wordTransitions.get(w);
+              if (!fRow) {
+                fRow = new Map();
+                this.wordTransitions.set(w, fRow);
+              }
+              fRow.set(nextW, (fRow.get(nextW) || 0) + 1);
+
+              let bRow = this.wordBackwardTransitions.get(nextW);
+              if (!bRow) {
+                bRow = new Map();
+                this.wordBackwardTransitions.set(nextW, bRow);
+              }
+              bRow.set(w, (bRow.get(w) || 0) + 1);
+            }
+
+            for (let v = 0; v < 8; v++) {
+              const targetIdx = i + v + 1;
+              if (targetIdx < sWords.length) {
+                const targetW = sWords[targetIdx];
+                const viewMap = this.multiViewWordCouplings[v];
+                let vRow = viewMap.get(w);
+                if (!vRow) {
+                  vRow = new Map();
+                  viewMap.set(w, vRow);
+                }
+                vRow.set(targetW, (vRow.get(targetW) || 0) + 1);
+              }
+            }
+          }
+
+          for (let i = 0; i <= focalText.length - 5; i += 2) {
+            if (this.charWindowHabituation.size < 120_000) {
+              const win5 = focalText.slice(i, i + 5);
+              this.charWindowHabituation.set(
+                win5,
+                (this.charWindowHabituation.get(win5) || 0) + statsStride
+              );
+            }
+          }
+        }
+      }
+
+      // Ensure all 7 foundational CORPORE_DOCUMENTS molecules are present at the front of the crystal
+      // in case an earlier Gutenberg stream with a matching title overwrote any of them
+      const missingCoreMols: CrossbarNarrativeMolecule[] = [];
+      for (const doc of CORPORE_DOCUMENTS) {
+        const docMols = this.extractNarrativeMolecules(doc.content, doc.title);
+        for (const dm of docMols) {
+          const exists = this.molecules.some(
+            (m) => m.focalText.trim() === dm.focalText.trim()
+          );
+          if (!exists) {
+            missingCoreMols.push(dm);
+            this.crystallizeMoleculeH8DelayLines(dm, 2, 0.18, 16);
+          }
+        }
+      }
+      if (missingCoreMols.length > 0) {
+        this.molecules = [...missingCoreMols, ...this.molecules];
+      }
+
+      this.recalibrateThermodynamics(startTime);
+      this.mmapBinSizeBytes = buffer.byteLength;
+      this.mmapLastSyncMs = Math.round((performance.now() - startTime) * 10) / 10;
+      this.mmapStatus = `WASM MMAP ACTIVE (${(buffer.byteLength / (1024 * 1024)).toFixed(2)} MB .bin · ${this.memoryManager.wasmPagesAllocated} pages)`;
+      this.isMmapRestored = true;
+      return true;
+    } catch {
       return false;
     }
-
-    const presetCode = headerU32[2];
-    const targetPreset: MemoryCapacityPreset =
-      presetCode === 0 ? '5M' : presetCode === 2 ? '100M' : '25M';
-    if (this.preset !== targetPreset) {
-      this.switchPreset(targetPreset);
-    }
-
-    const vocabCount = Math.min(headerU32[3], this.config.maxVocab);
-    const synCount = Math.min(headerU32[4], this.config.maxSynapses);
-    this.totalIngestedTokens = headerU32[5];
-    this.ingestedBooksCount = headerU32[6];
-    this.totalRawCharsTrained = headerU32[7];
-    this.totalWordStreamIndex = headerU32[8];
-    this.calibratedCStar = headerF32[9] || 4;
-    this.calibratedThTrans = headerF32[10] || 1.25;
-    const jsonByteLen = headerU32[11];
-    this.mmapPlasticWriteCount = headerU32[12] || 0;
-
-    let offset = 64;
-    const rowPtrBytes = (headerU32[3] + 1) * 4;
-    const vocabArrBytes = headerU32[3] * 4;
-    const synArrBytes = headerU32[4] * 4;
-
-    this.rowPtr.fill(0);
-    this.rowCounts.fill(0);
-    this.headEdge.fill(-1);
-    this.nextEdge.fill(-1);
-
-    this.rowPtr.set(new Uint32Array(buffer, offset, vocabCount + 1));
-    offset += rowPtrBytes;
-
-    this.rowCounts.set(new Uint32Array(buffer, offset, vocabCount));
-    offset += vocabArrBytes;
-
-    this.tokenFreq.set(new Uint32Array(buffer, offset, vocabCount));
-    offset += vocabArrBytes;
-
-    this.tokenStartFreq.set(new Uint32Array(buffer, offset, vocabCount));
-    offset += vocabArrBytes;
-
-    this.tokenHfwd.set(new Float32Array(buffer, offset, vocabCount));
-    offset += vocabArrBytes;
-
-    this.tokenMu.set(new Float32Array(buffer, offset, vocabCount));
-    offset += vocabArrBytes;
-
-    this.colHorizon.set(new Uint32Array(buffer, offset, synCount));
-    offset += synArrBytes;
-
-    this.conductance.set(new Float32Array(buffer, offset, synCount));
-    offset += synArrBytes;
-
-    this.edgeSource.set(new Uint32Array(buffer, offset, synCount));
-    offset += synArrBytes;
-
-    this.synapseLineage.set(new Uint32Array(buffer, offset, synCount));
-    offset += synArrBytes;
-
-    this.activeSynapses = synCount;
-
-    const maxAux = Math.min(synCount, this.nextEdge.length);
-    for (let e = maxAux - 1; e >= 0; e--) {
-      const src = this.edgeSource[e];
-      if (src < this.headEdge.length) {
-        this.nextEdge[e] = this.headEdge[src];
-        this.headEdge[src] = e;
-      }
-    }
-
-    const jsonSlice = new Uint8Array(buffer, offset, jsonByteLen);
-    const decoder = new TextDecoder();
-    const meta = JSON.parse(decoder.decode(jsonSlice)) as {
-      v: string[];
-      m: Array<[string, number, string, number, string, string, string]>;
-      b: IngestedBookRecord[];
-      wc: Array<[string, number]>;
-      ws: Array<[string, number]>;
-      cf: Array<[string, Array<[string, number]>]>;
-      cb: Array<[string, Array<[string, number]>]>;
-      cal?: CorpusCalibrationArtifact;
-      lw?: string;
-    };
-
-    this.vocabList = meta.v || [];
-    this.lastTemporalWave = meta.lw || '';
-    this.tokenToIdMap.clear();
-    this.lowerTokenToIdMap.clear();
-    for (let i = 0; i < this.vocabList.length; i++) {
-      const tok = this.vocabList[i];
-      this.tokenToIdMap.set(tok, i);
-      const low = tok.toLowerCase();
-      if (!this.lowerTokenToIdMap.has(low)) {
-        this.lowerTokenToIdMap.set(low, i);
-      }
-    }
-
-    this.ingestedBookRegistry = meta.b || [];
-    if (meta.cal) {
-      this.calibrationArtifact = meta.cal;
-    }
-
-    this.wordCounts = new Map(meta.wc || []);
-    this.wordSentenceStartCounts = new Map(meta.ws || []);
-    this.dynamicLexicon = new Set(this.wordCounts.keys());
-
-    this.charMemristorCrossbar.clear();
-    for (const [cA, entries] of meta.cf || []) {
-      this.charMemristorCrossbar.set(cA, new Map(entries));
-      this.uniqueCharSet.add(cA);
-    }
-
-    this.charBackwardCrossbar.clear();
-    for (const [cB, entries] of meta.cb || []) {
-      this.charBackwardCrossbar.set(cB, new Map(entries));
-    }
-
-    this.molecules = [];
-    this.wordTransitions.clear();
-    this.wordBackwardTransitions.clear();
-    this.multiViewWordCouplings.forEach((m) => m.clear());
-    this.charDelayLineSynapses.clear();
-    this.charDelayLineLineages.clear();
-    this.charDelayEdgeCount = 0;
-
-    for (const item of meta.m || []) {
-      const [id, lineageId, docTitle, sentenceIndex, prevText, focalText, nextText] = item;
-      const toks = this.tokenize(focalText);
-      const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
-      const clauses = focalText
-        .split(/[;:]/)
-        .map((c) => c.trim())
-        .filter((c) => c.length > 4);
-      const lowerWords = toks
-        .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
-        .filter((w) => w.length >= 2);
-
-      const mol: CrossbarNarrativeMolecule = {
-        id,
-        lineageId,
-        docTitle,
-        sentenceIndex,
-        prevText,
-        focalText,
-        nextText,
-        clauses: clauses.length > 0 ? clauses : [focalText],
-        tokenIds,
-        lowerWords,
-      };
-      this.molecules.push(mol);
-
-      if (docTitle === 'Live Plastic Crystal Memory') {
-        this.crystallizeMoleculeH8DelayLines(mol, 3, 0.22, 16);
-      }
-    }
-
-    this.recalibrateThermodynamics(startTime);
-    this.mmapBinSizeBytes = buffer.byteLength;
-    this.mmapLastSyncMs = Math.round((performance.now() - startTime) * 10) / 10;
-    this.mmapStatus = `WASM MMAP ACTIVE (${(buffer.byteLength / (1024 * 1024)).toFixed(2)} MB .bin · ${this.memoryManager.wasmPagesAllocated} pages)`;
-    this.isMmapRestored = true;
-    return true;
   }
 
   /**

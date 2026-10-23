@@ -2,16 +2,30 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CRYSTAL_DATA_DIR = path.join(__dirname, 'data');
+// Store binary .bin mmap image in OS tmpdir outside the Vite project root so
+// high-frequency binary writes never trigger Vite file-watcher reloads
+const CRYSTAL_DATA_DIR = path.join(os.tmpdir(), 'synaptron_crystal_mmap');
 const CRYSTAL_BIN_PATH = path.join(CRYSTAL_DATA_DIR, 'synaptron_crystal.bin');
+const LEGACY_DATA_BIN = path.join(__dirname, 'data', 'synaptron_crystal.bin');
 
 if (!fs.existsSync(CRYSTAL_DATA_DIR)) {
   fs.mkdirSync(CRYSTAL_DATA_DIR, { recursive: true });
+}
+
+// Migrate any existing data/synaptron_crystal.bin out of the Vite workspace root
+if (fs.existsSync(LEGACY_DATA_BIN) && !fs.existsSync(CRYSTAL_BIN_PATH)) {
+  try {
+    fs.copyFileSync(LEGACY_DATA_BIN, CRYSTAL_BIN_PATH);
+    fs.unlinkSync(LEGACY_DATA_BIN);
+  } catch {
+    // Ignore migration errors
+  }
 }
 
 // Server-side zero-copy mmap page cache for synaptron_crystal.bin
@@ -572,7 +586,11 @@ async function startServer() {
   // Vite middleware for development vs static serving in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
