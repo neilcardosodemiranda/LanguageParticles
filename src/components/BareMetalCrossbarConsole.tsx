@@ -48,6 +48,7 @@ import {
   Play,
   Square,
   Upload,
+  Download,
   Sparkles,
   RefreshCw,
 } from 'lucide-react';
@@ -111,6 +112,13 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const [isAutoCrawling, setIsAutoCrawling] = useState<boolean>(false);
   const autoCrawlAbortRef = useRef<boolean>(false);
   const fileUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const binUploadInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Real-time Plasticity & .bin Mmap States
+  const [plasticLearningOn, setPlasticLearningOn] = useState<boolean>(
+    wasmCrossbarEngine.plasticQueryLearningEnabled
+  );
+  const [plasticFeedbackBanner, setPlasticFeedbackBanner] = useState<string>('');
 
   // Synthesis & Query States
   const [currentQuery, setCurrentQuery] = useState<string>('What was the Time Machine made of?');
@@ -140,17 +148,38 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     return () => clearInterval(timer);
   }, []);
 
-  // Initial prime: train on corpus if fresh engine
+  // Initial prime: FIRST restore from persistent SCB1 .bin mmap (Server + IndexedDB)
+  // so 75,000+ learned words and taught facts never reset on page reload!
   useEffect(() => {
-    if (wasmCrossbarEngine.totalIngestedTokens === 0) {
-      for (const doc of CORPORE_DOCUMENTS) {
-        wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
+    let mounted = true;
+    (async () => {
+      const restored = await wasmCrossbarEngine.restoreFromBinaryMmap();
+      if (!mounted) return;
+
+      if (restored && wasmCrossbarEngine.totalIngestedTokens > 0) {
+        setActiveCapacity(wasmCrossbarEngine.preset);
+        setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+        setTelemetry(wasmCrossbarEngine.getTelemetry());
+        setPlasticFeedbackBanner(
+          `Restored persistent SCB1 .bin crystal: ${(wasmCrossbarEngine.vocabList.length - 3).toLocaleString()} words & ${wasmCrossbarEngine.molecules.length.toLocaleString()} narrative molecules mapped in ${wasmCrossbarEngine.mmapLastSyncMs} ms.`
+        );
+        handleExecuteSynthesis(currentQuery);
+      } else if (wasmCrossbarEngine.totalIngestedTokens === 0) {
+        for (const doc of CORPORE_DOCUMENTS) {
+          wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
+        }
+        await wasmCrossbarEngine.syncToBinaryMmap();
+        if (!mounted) return;
+        setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+        setTelemetry(wasmCrossbarEngine.getTelemetry());
+        handleExecuteSynthesis('What was the Time Machine made of?');
+      } else if (!synthesisResult) {
+        handleExecuteSynthesis(currentQuery);
       }
-      setTelemetry(wasmCrossbarEngine.getTelemetry());
-      handleExecuteSynthesis('What was the Time Machine made of?');
-    } else if (!synthesisResult) {
-      handleExecuteSynthesis(currentQuery);
-    }
+    })();
+    return () => {
+      mounted = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -418,9 +447,77 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
       if (collectedSteps.length > 0) {
         setLatestStep(collectedSteps[collectedSteps.length - 1]);
       }
+      if (synthResult.plasticSummary) {
+        setPlasticFeedbackBanner(synthResult.plasticSummary);
+      }
       setIsSynthesizing(false);
       setTelemetry(wasmCrossbarEngine.getTelemetry());
     }, 30);
+  };
+
+  // Explicit 1-click "Teach Crystal" handler (etches any statement or Q&A pair directly into Live Plastic Crystal Memory + .bin)
+  const handleTeachCrystalDirectly = () => {
+    const q = currentQuery.trim();
+    if (!q) return;
+    const learned = wasmCrossbarEngine.learnFromRealtimeInput(q, true);
+    if (learned.summary) {
+      setPlasticFeedbackBanner(learned.summary);
+    }
+    soundEngine.playHadronFormation();
+    setTelemetry(wasmCrossbarEngine.getTelemetry());
+    handleExecuteSynthesis(q);
+  };
+
+  // Toggle Real-Time Query Plasticity
+  const handleTogglePlasticity = () => {
+    const nextState = !plasticLearningOn;
+    setPlasticLearningOn(nextState);
+    wasmCrossbarEngine.plasticQueryLearningEnabled = nextState;
+    setTelemetry(wasmCrossbarEngine.getTelemetry());
+  };
+
+  // Export SCB1 .bin Binary Mmap File to user's computer
+  const handleExportBinaryMmapFile = () => {
+    const buffer = wasmCrossbarEngine.exportBinaryMmap();
+    const blob = new Blob([buffer], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const vocabCount = Math.max(0, wasmCrossbarEngine.vocabList.length - 3);
+    a.href = url;
+    a.download = `synaptron_crystal_${vocabCount}w.bin`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setPlasticFeedbackBanner(
+      `Exported SCB1 binary crystal image (${(buffer.byteLength / (1024 * 1024)).toFixed(2)} MB .bin, ${vocabCount.toLocaleString()} words).`
+    );
+  };
+
+  // Import SCB1 .bin Binary Mmap File from user's computer
+  const handleImportBinaryMmapFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const arrayBuf = await file.arrayBuffer();
+      const ok = wasmCrossbarEngine.importBinaryMmap(arrayBuf);
+      if (ok) {
+        await wasmCrossbarEngine.syncToBinaryMmap();
+        setActiveCapacity(wasmCrossbarEngine.preset);
+        setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+        setTelemetry(wasmCrossbarEngine.getTelemetry());
+        const vocabCount = Math.max(0, wasmCrossbarEngine.vocabList.length - 3);
+        setPlasticFeedbackBanner(
+          `Mapped "${file.name}" (${(arrayBuf.byteLength / (1024 * 1024)).toFixed(2)} MB .bin): ${vocabCount.toLocaleString()} words & ${wasmCrossbarEngine.molecules.length.toLocaleString()} molecules online!`
+        );
+        soundEngine.playHadronFormation();
+      } else {
+        setPlasticFeedbackBanner('Invalid SCB1 .bin file header.');
+      }
+    } catch {
+      setPlasticFeedbackBanner('Failed to map .bin file.');
+    }
+    e.target.value = '';
   };
 
   // Preset Query Selection
@@ -583,28 +680,60 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
             </div>
           </div>
 
-          {/* Preset Capacity Selector */}
-          <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-md border border-slate-800">
-            {(['5M', '25M', '100M'] as MemoryCapacityPreset[]).map((preset) => {
-              const active = activeCapacity === preset;
-              return (
-                <button
-                  key={preset}
-                  onClick={() => handleSwitchCapacity(preset)}
-                  className={`px-3 py-1 rounded text-xs font-mono font-medium transition-all cursor-pointer ${
-                    active
-                      ? 'bg-sky-600 text-white shadow-sm shadow-sky-900/50 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                  title={MEMORY_PRESETS[preset].description}
-                >
-                  {preset}
-                  <span className="text-[10px] ml-1 opacity-70">
-                    ({preset === '5M' ? '42MB' : preset === '25M' ? '210MB' : '841MB'})
-                  </span>
-                </button>
-              );
-            })}
+          {/* Binary .bin Mmap Controls & Preset Capacity Selector */}
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={binUploadInputRef}
+              type="file"
+              accept=".bin,application/octet-stream"
+              onChange={handleImportBinaryMmapFile}
+              className="hidden"
+            />
+            <div className="flex items-center gap-1.5 bg-slate-900/90 px-2 py-1 rounded-md border border-emerald-800/60">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[10px] font-mono text-emerald-300 font-semibold">
+                {telemetry.mmapStatus}
+              </span>
+              <button
+                onClick={handleExportBinaryMmapFile}
+                className="ml-1 px-2 py-0.5 rounded bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/60 text-[10px] font-mono flex items-center gap-1 cursor-pointer"
+                title="Download zero-copy SCB1 .bin memory-mapped crystal snapshot"
+              >
+                <Download className="w-3 h-3" />
+                <span>Save .bin</span>
+              </button>
+              <button
+                onClick={() => binUploadInputRef.current?.click()}
+                className="px-2 py-0.5 rounded bg-sky-950/90 hover:bg-sky-900 text-sky-200 border border-sky-700/60 text-[10px] font-mono flex items-center gap-1 cursor-pointer"
+                title="Map an existing SCB1 .bin crystal file directly into TypedArray memory"
+              >
+                <Upload className="w-3 h-3" />
+                <span>Map .bin</span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-md border border-slate-800">
+              {(['5M', '25M', '100M'] as MemoryCapacityPreset[]).map((preset) => {
+                const active = activeCapacity === preset;
+                return (
+                  <button
+                    key={preset}
+                    onClick={() => handleSwitchCapacity(preset)}
+                    className={`px-3 py-1 rounded text-xs font-mono font-medium transition-all cursor-pointer ${
+                      active
+                        ? 'bg-sky-600 text-white shadow-sm shadow-sky-900/50 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                    }`}
+                    title={MEMORY_PRESETS[preset].description}
+                  >
+                    {preset}
+                    <span className="text-[10px] ml-1 opacity-70">
+                      ({preset === '5M' ? '42MB' : preset === '25M' ? '210MB' : '841MB'})
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -775,26 +904,66 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
               </div>
             </div>
 
-            {/* Input Query Bar */}
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={currentQuery}
-                onChange={(e) => setCurrentQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleExecuteSynthesis();
-                }}
-                placeholder="Ask any question about the Time Machine, Newton's laws, relativity, or literature..."
-                className="flex-1 bg-slate-900/90 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 font-mono"
-              />
-              <button
-                onClick={() => handleExecuteSynthesis()}
-                disabled={isSynthesizing}
-                className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-sm shadow-sky-900/40"
-              >
-                <Zap className="w-3.5 h-3.5" />
-                <span>EXCITE CROSSBAR</span>
-              </button>
+            {/* Input Query & Real-Time Plastic Teaching Bar */}
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  value={currentQuery}
+                  onChange={(e) => setCurrentQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleExecuteSynthesis();
+                  }}
+                  placeholder='Ask a question OR teach the crystal directly (e.g. "Your name is Synaptron." or "What is your name? My name is Synaptron.")...'
+                  className="flex-1 min-w-[260px] bg-slate-900/90 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 font-mono"
+                />
+                <button
+                  onClick={() => handleExecuteSynthesis()}
+                  disabled={isSynthesizing}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-sm shadow-sky-900/40"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>EXCITE CROSSBAR</span>
+                </button>
+                <button
+                  onClick={handleTeachCrystalDirectly}
+                  disabled={isSynthesizing}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-sm shadow-emerald-900/40"
+                  title="Etch this statement or Q&A pair directly into Live Plastic Crystal Memory and sync to .bin mmap"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>TEACH CRYSTAL (.BIN)</span>
+                </button>
+              </div>
+
+              {/* Real-Time Plasticity Status Strip */}
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/60 border border-slate-800/80 rounded px-2.5 py-1 text-[10px] font-mono">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={handleTogglePlasticity}
+                    className={`px-2 py-0.5 rounded border font-bold cursor-pointer transition-colors ${
+                      plasticLearningOn
+                        ? 'bg-emerald-950/90 border-emerald-500/60 text-emerald-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    REAL-TIME QUERY PLASTICITY: {plasticLearningOn ? 'ON (AUTO-ETCH & STDP)' : 'OFF'}
+                  </button>
+                  <span className="text-slate-400">
+                    Plastic Writes: <b className="text-emerald-300">{telemetry.mmapPlasticWriteCount}</b>
+                  </span>
+                  <span className="text-slate-500">·</span>
+                  <span className="text-slate-400">
+                    Tip: Type <span className="text-sky-300">&ldquo;Your name is Synaptron.&rdquo;</span> then ask{' '}
+                    <span className="text-amber-300">&ldquo;What is your name?&rdquo;</span>
+                  </span>
+                </div>
+                {plasticFeedbackBanner && (
+                  <span className="text-emerald-300 truncate max-w-md">
+                    ⚡ {plasticFeedbackBanner}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Query Particle Spin & Boson Telemetry + Cat Gate Status */}

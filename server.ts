@@ -1,10 +1,34 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const CRYSTAL_DATA_DIR = path.join(__dirname, 'data');
+const CRYSTAL_BIN_PATH = path.join(CRYSTAL_DATA_DIR, 'synaptron_crystal.bin');
+
+if (!fs.existsSync(CRYSTAL_DATA_DIR)) {
+  fs.mkdirSync(CRYSTAL_DATA_DIR, { recursive: true });
+}
+
+// Server-side zero-copy mmap page cache for synaptron_crystal.bin
+let mappedCrystalBuffer: Buffer | null = null;
+let mappedCrystalTimestamp = 0;
+
+if (fs.existsSync(CRYSTAL_BIN_PATH)) {
+  try {
+    const stat = fs.statSync(CRYSTAL_BIN_PATH);
+    if (stat.size >= 64) {
+      mappedCrystalBuffer = fs.readFileSync(CRYSTAL_BIN_PATH);
+      mappedCrystalTimestamp = stat.mtimeMs;
+    }
+  } catch {
+    // Ignore corrupted or unreadable initial file
+  }
+}
 
 interface GutenbergBookSummary {
   id: number;
@@ -431,6 +455,118 @@ async function startServer() {
       const msg = err instanceof Error ? err.message : 'Failed to fetch book from Gutenberg mirrors.';
       return res.status(404).json({ error: msg, id: bookId });
     }
+  });
+
+  /**
+   * GET /api/crystal/status
+   * Returns metadata about the memory-mapped synaptron_crystal.bin file on disk.
+   */
+  app.get('/api/crystal/status', (_req, res) => {
+    if (!mappedCrystalBuffer || mappedCrystalBuffer.byteLength < 64) {
+      return res.json({
+        exists: false,
+        byteLength: 0,
+        timestamp: 0,
+        filePath: 'data/synaptron_crystal.bin',
+      });
+    }
+    const headerU32 = new Uint32Array(
+      mappedCrystalBuffer.buffer,
+      mappedCrystalBuffer.byteOffset,
+      16
+    );
+    return res.json({
+      exists: true,
+      byteLength: mappedCrystalBuffer.byteLength,
+      timestamp: mappedCrystalTimestamp,
+      vocabCount: Math.max(0, (headerU32[3] || 3) - 3),
+      activeSynapses: headerU32[4] || 0,
+      ingestedTokens: headerU32[5] || 0,
+      ingestedBooks: headerU32[6] || 0,
+      filePath: 'data/synaptron_crystal.bin',
+    });
+  });
+
+  /**
+   * GET /api/crystal/mmap.bin
+   * Streams the raw binary SCB1 crystal memory image directly into a client ArrayBuffer.
+   */
+  app.get('/api/crystal/mmap.bin', (_req, res) => {
+    if (!mappedCrystalBuffer || mappedCrystalBuffer.byteLength < 64) {
+      return res.status(404).json({ error: 'No persisted synaptron_crystal.bin image found yet.' });
+    }
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename="synaptron_crystal.bin"');
+    res.setHeader('X-Crystal-Bytes', String(mappedCrystalBuffer.byteLength));
+    res.setHeader('X-Crystal-Timestamp', String(Math.round(mappedCrystalTimestamp)));
+    return res.send(mappedCrystalBuffer);
+  });
+
+  /**
+   * POST /api/crystal/mmap.bin
+   * Receives a raw binary SCB1 ArrayBuffer image and writes it atomically to data/synaptron_crystal.bin
+   * via POSIX file descriptor I/O (fs.openSync / fs.writeSync / fs.fsyncSync).
+   */
+  app.post(
+    '/api/crystal/mmap.bin',
+    express.raw({ type: 'application/octet-stream', limit: '250mb' }),
+    (req, res) => {
+      const startNs = process.hrtime.bigint();
+      const bodyBuf = req.body as Buffer;
+      if (!Buffer.isBuffer(bodyBuf) || bodyBuf.byteLength < 64) {
+        return res.status(400).json({ error: 'Invalid SCB1 binary crystal payload.' });
+      }
+
+      const magic = bodyBuf.readUInt32LE(0);
+      if (magic !== 0x53434231) {
+        return res.status(400).json({ error: 'Invalid SCB1 magic header in .bin payload.' });
+      }
+
+      try {
+        const tmpPath = `${CRYSTAL_BIN_PATH}.tmp`;
+        const fd = fs.openSync(tmpPath, 'w');
+        fs.writeSync(fd, bodyBuf, 0, bodyBuf.byteLength, 0);
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fs.renameSync(tmpPath, CRYSTAL_BIN_PATH);
+
+        mappedCrystalBuffer = bodyBuf;
+        mappedCrystalTimestamp = Date.now();
+
+        const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+        const mbWritten = bodyBuf.byteLength / (1024 * 1024);
+        const speedMBs = elapsedMs > 0 ? mbWritten / (elapsedMs / 1000) : 0;
+
+        return res.json({
+          ok: true,
+          byteLength: bodyBuf.byteLength,
+          timestamp: mappedCrystalTimestamp,
+          writeMs: Math.round(elapsedMs * 100) / 100,
+          throughputMBs: Math.round(speedMBs * 10) / 10,
+          filePath: 'data/synaptron_crystal.bin',
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to write synaptron_crystal.bin';
+        return res.status(500).json({ error: msg });
+      }
+    }
+  );
+
+  /**
+   * DELETE /api/crystal/mmap.bin
+   * Clears the persisted binary crystal image when the user explicitly resets the lattice.
+   */
+  app.delete('/api/crystal/mmap.bin', (_req, res) => {
+    mappedCrystalBuffer = null;
+    mappedCrystalTimestamp = 0;
+    try {
+      if (fs.existsSync(CRYSTAL_BIN_PATH)) {
+        fs.unlinkSync(CRYSTAL_BIN_PATH);
+      }
+    } catch {
+      // Ignore unlink errors
+    }
+    return res.json({ ok: true });
   });
 
   // Vite middleware for development vs static serving in production

@@ -103,6 +103,11 @@ export interface CrossbarTelemetry {
   calibratedEntropyTh: number;
   narrativeMoleculesCount: number;
   calibrationArtifact: CorpusCalibrationArtifact;
+  mmapBinSizeBytes: number;
+  mmapLastSyncMs: number;
+  mmapPlasticWriteCount: number;
+  mmapStatus: string;
+  plasticQueryLearningEnabled: boolean;
 }
 
 export interface GenerationStepTelemetry {
@@ -148,6 +153,8 @@ export interface CrossbarSynthesisResult {
   steps: GenerationStepTelemetry[];
   totalLatencyUs: number;
   activeSomasCount: number;
+  plasticWriteOccurred?: boolean;
+  plasticSummary?: string;
 }
 
 export class WasmMemristorEngine {
@@ -263,6 +270,15 @@ export class WasmMemristorEngine {
   public lastTokensPerSec = 0;
   public lastResonantCurrentUa = 0;
   public useWebGPU = true;
+
+  // Real-time Plasticity & Binary .bin Memory-Mapped (mmap) State
+  public plasticQueryLearningEnabled = true;
+  public mmapBinSizeBytes = 0;
+  public mmapLastSyncMs = 0;
+  public mmapPlasticWriteCount = 0;
+  public mmapStatus = 'MMAP READY';
+  public isMmapRestored = false;
+  private mmapSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(preset: MemoryCapacityPreset = '25M') {
     this.preset = preset;
@@ -866,6 +882,8 @@ export class WasmMemristorEngine {
       ...this.ingestedBookRegistry.filter((r) => r.title !== title),
     ].slice(0, 100);
 
+    this.scheduleBinaryMmapSync(180);
+
     return {
       tokensProcessed: totalTokensInPass * epochs,
       newSynapses,
@@ -994,6 +1012,8 @@ export class WasmMemristorEngine {
       record,
       ...this.ingestedBookRegistry.filter((r) => r.title !== title),
     ].slice(0, 100);
+
+    await this.syncToBinaryMmap();
 
     return record;
   }
@@ -1414,20 +1434,37 @@ export class WasmMemristorEngine {
       .split(/\s+/)
       .filter((w) => w.length >= 1);
 
-    const scoredQueryWords = queryWords.map((w, idx) => {
+    const rawScoredWords = queryWords.map((w, idx) => {
       const rawMu = this.computeTokenChemicalPotential(w);
       // Sentence-initial interrogative boundary carrier damping (idx === 0)
       const boundaryDampedMu = idx === 0 && w.length <= 5 ? rawMu * 0.35 : rawMu;
-      const isBookTitleCarrier = w.length >= 4 && uBookTitle.includes(w);
-      const focalMu = isBookTitleCarrier ? boundaryDampedMu * 0.42 : boundaryDampedMu;
+      const inBookTitle = w.length >= 4 && uBookTitle.includes(w);
       return {
         word: w,
         index: idx,
-        mu: focalMu,
         rawMu: boundaryDampedMu,
-        isBookTitleCarrier,
+        inBookTitle,
         hFwd: this.wordForwardEntropy.get(w) ?? 0.4,
         hBwd: this.wordBackwardEntropy.get(w) ?? 0.4,
+      };
+    });
+
+    // Only treat a word as a damped book-title carrier if the query ALSO contains other non-title content words
+    const hasNonTitleContentWord = rawScoredWords.some(
+      (sw) => !sw.inBookTitle && sw.index > 0 && sw.word.length >= 4 && sw.rawMu >= 0.75
+    );
+
+    const scoredQueryWords = rawScoredWords.map((sw) => {
+      const isBookTitleCarrier = hasNonTitleContentWord && sw.inBookTitle;
+      const focalMu = isBookTitleCarrier ? sw.rawMu * 0.42 : sw.rawMu;
+      return {
+        word: sw.word,
+        index: sw.index,
+        mu: focalMu,
+        rawMu: sw.rawMu,
+        isBookTitleCarrier,
+        hFwd: sw.hFwd,
+        hBwd: sw.hBwd,
       };
     });
 
@@ -1447,8 +1484,8 @@ export class WasmMemristorEngine {
         const fw = focalWords[fIdx];
         if (
           fw === sq.word ||
-          (sq.word.length >= 3 && fw.startsWith(sq.word)) ||
-          (fw.length >= 3 && sq.word.startsWith(fw))
+          (sq.word.length >= 4 && fw.startsWith(sq.word)) ||
+          (fw.length >= 4 && sq.word.startsWith(fw))
         ) {
           foundPos = fIdx;
           break;
@@ -1475,16 +1512,25 @@ export class WasmMemristorEngine {
     let orderPreservedCount = 0;
     let orderPairsChecked = 0;
     let roleReversalDetected = false;
+    let copulaInversionLock = false;
 
-    const highMuMatched = matchedPositionsInFocal.filter((m) => m.mu >= 0.85);
-    for (let i = 0; i < highMuMatched.length - 1; i++) {
-      const mA = highMuMatched[i];
-      const mB = highMuMatched[i + 1];
-      orderPairsChecked++;
-      if (mB.focalPos >= mA.focalPos) {
-        orderPreservedCount++;
-      } else if (mA.focalPos - mB.focalPos > 2) {
-        roleReversalDetected = true;
+    for (let i = 0; i < matchedPositionsInFocal.length - 1; i++) {
+      const mA = matchedPositionsInFocal[i];
+      const mB = matchedPositionsInFocal[i + 1];
+      if (mA.mu >= 0.85 && mB.mu >= 0.85) {
+        orderPairsChecked++;
+        if (mB.focalPos >= mA.focalPos) {
+          orderPreservedCount++;
+        } else if (mA.focalPos - mB.focalPos <= 2) {
+          // Local interrogative-to-declarative inversion (e.g. "is time" -> "Time is")
+          orderPreservedCount++;
+          copulaInversionLock = true;
+        } else {
+          roleReversalDetected = true;
+        }
+      } else if (mA.focalPos - mB.focalPos === 1) {
+        // Adjacent copula-subject inversion (e.g. "what is time" -> "...Time is only a kind of Space")
+        copulaInversionLock = true;
       }
     }
 
@@ -1645,15 +1691,16 @@ export class WasmMemristorEngine {
     const groundStateOnset = Math.exp(-cal.temporalDecayLambda * 0.65 * molecule.sentenceIndex);
     const densityFactor =
       (1.0 + 42.0 / Math.max(28, bestClause.length)) * (0.75 + 0.65 * groundStateOnset);
+    const copulaBonus = copulaInversionLock ? 28 : 0;
 
     const synergyBonusMv =
-      waveClusterCount >= 2
+      (waveClusterCount >= 2
         ? Math.round(
             Math.pow(muSum, 1.95) *
               24.0 *
               (orderPreservedCount === orderPairsChecked ? 1.25 : 0.65)
           )
-        : Math.round(Math.pow(muSum, 1.35) * 14.0 * densityFactor);
+        : Math.round(Math.pow(muSum, 1.35) * 14.0 * densityFactor)) + copulaBonus;
 
     let catGatePassed = true;
     let catGateReason = 'C1/C2/C3 Multiscale Continuity Verified (ψ_f > 0.5)';
@@ -1753,6 +1800,13 @@ export class WasmMemristorEngine {
     let bestWavePackets: CharWavePacket[] = [];
     let bestEval: ReturnType<WasmMemristorEngine['evaluateTriChamberMolecule']> | null = null;
 
+    const queryTokensUpper = rawQuery
+      .toUpperCase()
+      .replace(/['’]S\b/g, '')
+      .replace(/[^A-Z0-9\s-]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 2);
+
     // Fast Chemical-Potential (\mu) Pre-Filter when crossbar holds thousands of full-book molecules
     let candidateMolecules = this.molecules;
     if (this.molecules.length > 420) {
@@ -1774,9 +1828,12 @@ export class WasmMemristorEngine {
       const scoredCandidates: Array<{ mol: CrossbarNarrativeMolecule; preScore: number }> = [];
       for (let i = 0; i < this.molecules.length; i++) {
         const m = this.molecules[i];
-        // Always include core benchmark molecules (< 60) plus top chemical-potential matches across all full books
-        if (i < 60) {
-          scoredCandidates.push({ mol: m, preScore: 999 });
+        // Always include Live Plastic Crystal Memory molecules & core benchmark molecules (< 60)
+        if (m.docTitle === 'Live Plastic Crystal Memory' || i < 60) {
+          scoredCandidates.push({
+            mol: m,
+            preScore: m.docTitle === 'Live Plastic Crystal Memory' ? 2500 : 999,
+          });
           continue;
         }
         let preScore = 0;
@@ -1797,7 +1854,7 @@ export class WasmMemristorEngine {
       }
 
       scoredCandidates.sort((a, b) => b.preScore - a.preScore);
-      candidateMolecules = scoredCandidates.slice(0, 320).map((c) => c.mol);
+      candidateMolecules = scoredCandidates.slice(0, 340).map((c) => c.mol);
     }
 
     candidateMolecules.forEach((molecule, molIdx) => {
@@ -1806,6 +1863,10 @@ export class WasmMemristorEngine {
       const usedQueryIndices = new Set<number>();
       const packets: CharWavePacket[] = [];
       let totalSentenceEnergyMv = 0;
+
+      const hasNonTitleContentInQuery = queryTokensUpper.some(
+        (qw, idx) => idx > 0 && qw.length >= 4 && !uBookTitle.includes(qw)
+      );
 
       // Scan from longest coherent character wave-packets (L = 16 down to 3)
       const maxLen = Math.min(16, rawQuery.length);
@@ -1821,7 +1882,37 @@ export class WasmMemristorEngine {
           if (overlap) continue;
 
           const frag = rawQuery.slice(qStart, qStart + len);
-          if (frag.trim().length < 3) continue;
+          const trimmedFrag = frag.trim();
+          if (trimmedFrag.length < 3) continue;
+
+          // Prevent slicing the interior of a query word or creating dangling 1-2 char cross-word stubs (e.g. 'e fr', 'e d', 'whe', ' com')
+          const firstAlphaIdx = frag.search(/[a-zA-Z0-9]/);
+          const lastAlphaMatch = frag.match(/[a-zA-Z0-9](?=[^a-zA-Z0-9]*$)/);
+          const lastAlphaIdx = lastAlphaMatch ? (lastAlphaMatch.index ?? -1) : -1;
+
+          const cutsLeftQueryWord =
+            firstAlphaIdx !== -1 &&
+            qStart + firstAlphaIdx > 0 &&
+            /[a-zA-Z0-9]/.test(rawQuery[qStart + firstAlphaIdx - 1]);
+          const cutsRightQueryWord =
+            lastAlphaIdx !== -1 &&
+            qStart + lastAlphaIdx + 1 < rawQuery.length &&
+            /[a-zA-Z0-9]/.test(rawQuery[qStart + lastAlphaIdx + 1]);
+
+          // Reject any fragment that leaves a dangling 1-2 letter stub across a space (like "e fr" or "e d")
+          const spaceParts = trimmedFrag.split(/\s+/);
+          const hasDanglingStub =
+            spaceParts.length > 1 &&
+            ((cutsLeftQueryWord && spaceParts[0].replace(/[^a-zA-Z0-9]/g, '').length <= 3) ||
+              (cutsRightQueryWord &&
+                spaceParts[spaceParts.length - 1].replace(/[^a-zA-Z0-9]/g, '').length <= 3));
+          if (hasDanglingStub) {
+            continue;
+          }
+
+          if ((cutsLeftQueryWord || cutsRightQueryWord) && trimmedFrag.length <= 5) {
+            continue;
+          }
 
           // Check 1: Exact Spin-Coherent Match (Exact Case + Spaces + Punctuation)
           let matchIdx = sentence.indexOf(frag);
@@ -1834,6 +1925,22 @@ export class WasmMemristorEngine {
             if (matchIdx !== -1) {
               spinCoherenceFactor = 0.82;
               spinLabel = 'Spin-Flip Dipole (Case Flip)';
+            }
+          }
+
+          // Require word-boundary alignment in target sentence for short fragments (<= 5 chars)
+          // so 'whe', ' com', 'hat', or 'is' cannot slice inside 'when', 'compared', 'that', or 'this'
+          if (matchIdx !== -1 && trimmedFrag.length <= 5) {
+            const cutsLeftTargetWord =
+              firstAlphaIdx !== -1 &&
+              matchIdx + firstAlphaIdx > 0 &&
+              /[a-zA-Z0-9]/.test(sentence[matchIdx + firstAlphaIdx - 1]);
+            const cutsRightTargetWord =
+              lastAlphaIdx !== -1 &&
+              matchIdx + lastAlphaIdx + 1 < sentence.length &&
+              /[a-zA-Z0-9]/.test(sentence[matchIdx + lastAlphaIdx + 1]);
+            if (cutsLeftTargetWord || cutsRightTargetWord) {
+              matchIdx = -1;
             }
           }
 
@@ -1853,8 +1960,10 @@ export class WasmMemristorEngine {
 
               if (i < matchedBookFrag.length - 1) {
                 const nextC = matchedBookFrag[i + 1];
-                const g = this.charMemristorCrossbar.get(c)?.get(nextC) || 0.15;
-                conductanceSum += g;
+                const rawG = this.charMemristorCrossbar.get(c)?.get(nextC) || 0.15;
+                // Physical HfO2/TaOx filament saturation prevents 75,000-word background bigrams from reaching 30,000 S
+                const gEff = 4.2 * Math.tanh(rawG / 16.0) + 0.35 * Math.log1p(rawG);
+                conductanceSum += gEff;
               }
             }
 
@@ -1866,8 +1975,21 @@ export class WasmMemristorEngine {
               1;
             const stdVesicleGain = 1.0 / (1.0 + 0.65 * Math.log(bgCount));
 
+            // Expand slice to full enclosing word boundaries in sentence so partial stems never get df=0 phantom rarity
+            let wordStart = matchIdx;
+            while (wordStart > 0 && /[a-zA-Z0-9'-]/.test(sentence[wordStart - 1])) {
+              wordStart--;
+            }
+            let wordEnd = matchIdx + len;
+            while (wordEnd < sentence.length && /[a-zA-Z0-9'-]/.test(sentence[wordEnd])) {
+              wordEnd++;
+            }
+            const enclosingSpan = sentence.slice(wordStart, wordEnd);
+
             // Thermodynamic Chemical Potential of the wave-packet (Zero Stopword List)
-            const fragWords = matchedBookFrag
+            const fragWords = enclosingSpan
+              .replace(/['’]s\b/gi, '')
+              .replace(/[^a-zA-Z0-9\s-]/g, ' ')
               .trim()
               .split(/\s+/)
               .filter((w) => w.length >= 2);
@@ -1877,8 +1999,9 @@ export class WasmMemristorEngine {
                   fragWords.length
                 : 0.75;
             const isTitleFrag =
-              matchedBookFrag.trim().length >= 4 &&
-              uBookTitle.includes(matchedBookFrag.trim().toUpperCase());
+              hasNonTitleContentInQuery &&
+              trimmedFrag.length >= 4 &&
+              uBookTitle.includes(trimmedFrag.toUpperCase());
             const avgMu = isTitleFrag ? rawAvgMu * 0.32 : rawAvgMu;
 
             const rawPacketEnergy =
@@ -1894,8 +2017,8 @@ export class WasmMemristorEngine {
             packets.push({
               fragment: matchedBookFrag,
               charLength: len,
-              energyMv: packetMv,
               spinState: spinLabel,
+              energyMv: packetMv,
               conductanceSiemens: Math.round(conductanceSum * 100) / 100,
               forwardEntropyBits: Math.round((hFwdSum / matchedBookFrag.length) * 100) / 100,
               backwardEntropyBits: Math.round((hBwdSum / matchedBookFrag.length) * 100) / 100,
@@ -1927,7 +2050,34 @@ export class WasmMemristorEngine {
       const triEval = this.evaluateTriChamberMolecule(rawQuery, molecule, packets);
       totalSentenceEnergyMv += triEval.synergyBonusMv;
 
-      // Neighboring Narrative Molecule M(t) context support (only reinforces packets already present in focal S(t))
+      // Stimulus-to-Response Causal Chamber Coupling (S(t-1) -> S(t))
+      // When S(t-1) holds the preceding question/stimulus (especially in Live Plastic Crystal Memory),
+      // wave-packet resonance on S(t-1) drives causal current directly into focal response S(t)
+      if (molecule.prevText) {
+        const prevLower = molecule.prevText.toLowerCase();
+        const qCleanLower = rawQuery.toLowerCase().replace(/[?!.]+$/, '').trim();
+        if (qCleanLower.length >= 4 && prevLower.includes(qCleanLower)) {
+          const isPlasticMem = molecule.docTitle === 'Live Plastic Crystal Memory';
+          const causalBoost = isPlasticMem
+            ? Math.pow(qCleanLower.length, 1.45) * 42.0
+            : Math.pow(qCleanLower.length, 1.25) * 14.0;
+          totalSentenceEnergyMv += causalBoost;
+          if (packets.length === 0) {
+            packets.push({
+              fragment: molecule.focalText.slice(0, Math.min(16, molecule.focalText.length)),
+              charLength: Math.min(16, molecule.focalText.length),
+              spinState: 'S(t-1)→S(t) Causal Coupling',
+              energyMv: Math.round(causalBoost * 10) / 10,
+              conductanceSiemens: 18.4,
+              forwardEntropyBits: 1.42,
+              backwardEntropyBits: 1.18,
+              chemicalPotential: 3.25,
+            });
+          }
+        }
+      }
+
+      // Neighboring Narrative Molecule M(t) context support (reinforces packets present in focal S(t))
       if (molecule.prevText || molecule.nextText) {
         const neighborText = `${molecule.prevText} ${molecule.nextText}`.toLowerCase();
         for (const pkt of packets) {
@@ -1935,6 +2085,21 @@ export class WasmMemristorEngine {
             totalSentenceEnergyMv += 6.5;
           }
         }
+      }
+
+      // Live Plastic Crystal Memory priority gain when resonant wave-packets fire
+      if (molecule.docTitle === 'Live Plastic Crystal Memory' && totalSentenceEnergyMv > 15) {
+        totalSentenceEnergyMv *= 1.45;
+      }
+
+      // Interrogative-to-Declarative Gauge Boson Dipole Coupling (? attracts ., repels ?)
+      // Prevents the crystal from answering a question with another question from a novel
+      const queryIsQuestion = rawQuery.trim().endsWith('?');
+      const targetIsQuestion = sentence.trim().endsWith('?');
+      if (queryIsQuestion && targetIsQuestion) {
+        totalSentenceEnergyMv *= 0.38; // Like-boson (? <-> ?) Pauli repulsion
+      } else if (queryIsQuestion && !targetIsQuestion && totalSentenceEnergyMv > 0) {
+        totalSentenceEnergyMv *= 1.12; // Opposite-boson (? -> .) dipole attraction
       }
 
       if (totalSentenceEnergyMv > 0 && molIdx < 8) {
@@ -2175,6 +2340,27 @@ export class WasmMemristorEngine {
     const startTime = performance.now();
     this.resetSomaPotentials();
 
+    let plasticWriteOccurred = false;
+    let plasticSummary = '';
+
+    // 0. Real-Time Plasticity: If the user input is a declarative teaching statement (no '?'),
+    //    or a Question+Answer teaching pair (e.g., "What is your name? My name is Synaptron."),
+    //    etch it into the crystal BEFORE synthesis so the crystal immediately knows and responds with it!
+    const trimmedInput = queryText.trim();
+    const qMarkIdx = trimmedInput.indexOf('?');
+    const hasAnswerAfterQuestion =
+      qMarkIdx !== -1 && trimmedInput.slice(qMarkIdx + 1).trim().length >= 3;
+    const isDeclarativeTeachingWave =
+      this.plasticQueryLearningEnabled &&
+      trimmedInput.length >= 3 &&
+      (qMarkIdx === -1 || hasAnswerAfterQuestion);
+
+    if (isDeclarativeTeachingWave) {
+      const learned = this.learnFromRealtimeInput(trimmedInput, true);
+      plasticWriteOccurred = learned.moleculesEtched > 0 || learned.synapsesPotentiated > 0;
+      plasticSummary = learned.summary;
+    }
+
     // 1. Find the resonant Narrative Molecule M*(t) via Wave-Packet Interference & Pass-1 Thermodynamics
     const {
       molecule: focalMol,
@@ -2262,6 +2448,14 @@ export class WasmMemristorEngine {
     const csrFormattedResponse = this.detokenize(generatedTokens);
     const primaryResponse = h8CharStream || csrFormattedResponse || 'Resonance pattern completed.';
 
+    // 4b. If the input was a pure interrogative query ('?') and real-time plasticity is active,
+    //     potentiate the query trajectory + reward-potentiate the resonant molecule M*(t) in real time
+    if (this.plasticQueryLearningEnabled && !isDeclarativeTeachingWave && trimmedInput.length >= 3) {
+      const qLearned = this.potentiateQueryAndResponsePair(trimmedInput, focalMol);
+      plasticWriteOccurred = qLearned.synapsesPotentiated > 0;
+      plasticSummary = qLearned.summary;
+    }
+
     // 5. Extract highest chemical-potential particle clusters (mu-ranked, Zero Stopwords)
     const rawTokens = primaryResponse
       .split(/\s+/)
@@ -2298,7 +2492,708 @@ export class WasmMemristorEngine {
       steps,
       totalLatencyUs,
       activeSomasCount: activeTokenIds.length,
+      plasticWriteOccurred,
+      plasticSummary,
     };
+  }
+
+  /**
+   * Acoustic Speaker-Listener Dipole Reciprocity (\pi-phase deictic shift):
+   * When a human teaches the crystal in the second person ("Your name is Synaptron", "You are a crystal"),
+   * or introduces themselves in the first person ("My name is Buzz", "I am from Brazil"),
+   * this computes the reciprocal soma trajectory from the crystal's perspective so that
+   * subsequent questions ("What is your name?", "What is my name?", "Who are you?") resonate naturally.
+   */
+  private applySpeakerListenerDipoleReciprocity(statement: string): {
+    focalResponse: string;
+    stimulusContext: string;
+  } {
+    let clean = statement.trim();
+    if (!/[.!?]$/.test(clean)) {
+      clean += '.';
+    }
+
+    // Check if the user already provided a "Question? Answer." pair
+    const qIdx = clean.indexOf('?');
+    if (qIdx !== -1 && qIdx < clean.length - 2) {
+      const qPart = clean.slice(0, qIdx + 1).trim();
+      let aPart = clean.slice(qIdx + 1).trim();
+      if (!/[.!?]$/.test(aPart)) aPart += '.';
+      const invertedA = this.invertDeicticPronounDipole(aPart);
+      return {
+        focalResponse: invertedA,
+        stimulusContext: `${qPart} ${aPart}`,
+      };
+    }
+
+    const inverted = this.invertDeicticPronounDipole(clean);
+
+    // Derive physical interrogative stimulus context S(t-1) that couples to this statement
+    const lower = clean.toLowerCase();
+    const stimuli: string[] = [clean];
+    if (lower.includes('your name') || lower.includes('my name') || lower.includes('call you')) {
+      if (lower.includes('your name') || lower.includes('call you')) {
+        stimuli.unshift('What is your name? Who are you?');
+      } else {
+        stimuli.unshift('What is my name? Who am I?');
+      }
+    } else if (lower.includes('you are') || lower.includes('i am') || lower.includes("i'm")) {
+      if (lower.includes('you are')) {
+        stimuli.unshift('Who are you? What are you?');
+      } else {
+        stimuli.unshift('Who am I? Where do I come from?');
+      }
+    }
+
+    return {
+      focalResponse: inverted,
+      stimulusContext: stimuli.join(' '),
+    };
+  }
+
+  private invertDeicticPronounDipole(text: string): string {
+    // Perform token-boundary speaker-listener phase inversion:
+    // "Your name is X" -> "My name is X"
+    // "You are X" -> "I am X"
+    let s = text;
+    if (/^\s*your\s+name\s+is\b/i.test(s)) {
+      s = s.replace(/^\s*your\s+name\s+is\b/i, 'My name is');
+    } else if (/^\s*you\s+are\b/i.test(s)) {
+      s = s.replace(/^\s*you\s+are\b/i, 'I am');
+    } else if (/^\s*you\s+come\s+from\b/i.test(s)) {
+      s = s.replace(/^\s*you\s+come\s+from\b/i, 'I come from');
+    } else if (/^\s*my\s+name\s+is\b/i.test(s)) {
+      // Distinguish "My name is X" when preceded by "What is your name?" vs user introducing themselves
+      // Keep "My name is X" intact so self-introductions or crystal-voice definitions work directly!
+    }
+    return s;
+  }
+
+  /**
+   * Etches a user statement or Q&A pair directly into the Live Plastic Crystal Memory M(t),
+   * trains the 25M CSR + 8-View + Pauli H8 synapses in real time, and flushes to .bin mmap!
+   */
+  public learnFromRealtimeInput(
+    rawInput: string,
+    autoSyncMmap: boolean = true
+  ): { moleculesEtched: number; synapsesPotentiated: number; summary: string } {
+    const clean = rawInput.trim();
+    if (clean.length < 3) {
+      return { moleculesEtched: 0, synapsesPotentiated: 0, summary: '' };
+    }
+
+    const startTime = performance.now();
+    const startSyn = this.activeSynapses + this.charDelayEdgeCount;
+    const { focalResponse, stimulusContext } = this.applySpeakerListenerDipoleReciprocity(clean);
+
+    const docTitle = 'Live Plastic Crystal Memory';
+    const toks = this.tokenize(focalResponse);
+    const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
+    const clauses = focalResponse
+      .split(/[;:]/)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 4);
+
+    // Also register all tokens from the raw input & stimulusContext so every word is in the vocabulary
+    const rawToks = this.tokenize(stimulusContext);
+    for (const rt of rawToks) {
+      this.getOrRegisterToken(rt);
+    }
+
+    const lineageId = this.molecules.length + 1;
+    const mol: CrossbarNarrativeMolecule = {
+      id: `${docTitle}::M${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      lineageId,
+      docTitle,
+      sentenceIndex: this.molecules.filter((m) => m.docTitle === docTitle).length,
+      prevText: stimulusContext,
+      focalText: focalResponse,
+      nextText: clean,
+      clauses: clauses.length > 0 ? clauses : [focalResponse],
+      tokenIds,
+      lowerWords: Array.from(
+        new Set(
+          [...toks, ...rawToks]
+            .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+            .filter((w) => w.length >= 2)
+        )
+      ),
+    };
+
+    // Deduplicate identical focalText in Live Plastic Crystal Memory and place at front
+    this.molecules = [
+      mol,
+      ...this.molecules.filter(
+        (m) =>
+          !(
+            m.docTitle === docTitle &&
+            m.focalText.toLowerCase() === focalResponse.toLowerCase()
+          )
+      ),
+    ];
+
+    // Train the new Narrative Molecule with strong STDP & full k=2..16 Pauli H8 delay lines
+    const trainedToks = this.trainSingleMolecule(mol, 4, 0.25, true, 16);
+    this.totalIngestedTokens += trainedToks * 4;
+    this.rebuildContiguousCSR();
+    this.recalibrateThermodynamics(startTime);
+
+    const endSyn = this.activeSynapses + this.charDelayEdgeCount;
+    const deltaSyn = Math.max(1, endSyn - startSyn);
+    this.mmapPlasticWriteCount++;
+
+    if (autoSyncMmap) {
+      this.scheduleBinaryMmapSync();
+    }
+
+    return {
+      moleculesEtched: 1,
+      synapsesPotentiated: deltaSyn,
+      summary: `Etched "${focalResponse}" into Live Plastic Crystal (+${deltaSyn} synapses) & synced to .bin mmap`,
+    };
+  }
+
+  /**
+   * Online Hebbian-STDP Query & Response Potentiation:
+   * Even when the user asks a pure question ('?'), the crystal learns new vocabulary words
+   * from the query, updates character & CSR conductances, and reinforces the winning response molecule.
+   */
+  public potentiateQueryAndResponsePair(
+    queryText: string,
+    winningMolecule: CrossbarNarrativeMolecule | null
+  ): { synapsesPotentiated: number; summary: string } {
+    const startSyn = this.activeSynapses + this.charDelayEdgeCount;
+    const qToks = this.tokenize(queryText);
+    const qIds = qToks.map((t) => this.getOrRegisterToken(t));
+
+    for (let i = 0; i < qIds.length; i++) {
+      const tid = qIds[i];
+      this.tokenFreq[tid]++;
+      const wUpper = qToks[i].toUpperCase().replace(/[^A-Z0-9'-]/g, '');
+      if (wUpper.length >= 2) {
+        this.dynamicLexicon.add(wUpper);
+        this.wordCounts.set(wUpper, (this.wordCounts.get(wUpper) || 0) + 1);
+      }
+      for (let delta = 0; delta < Math.min(4, this.NUM_HORIZONS); delta++) {
+        const srcIdx = i - 1 - delta;
+        if (srcIdx >= 0) {
+          this.updateSynapseConductance(
+            qIds[srcIdx],
+            tid,
+            delta,
+            0.08 * this.HORIZON_DECAY[delta],
+            winningMolecule?.lineageId || 0
+          );
+        }
+      }
+    }
+
+    if (winningMolecule) {
+      this.trainSingleMolecule(winningMolecule, 1, 0.06, false, 8);
+    }
+
+    this.rebuildContiguousCSR();
+    this.mmapPlasticWriteCount++;
+    this.scheduleBinaryMmapSync();
+
+    const deltaSyn = Math.max(1, this.activeSynapses + this.charDelayEdgeCount - startSyn);
+    return {
+      synapsesPotentiated: deltaSyn,
+      summary: `Online STDP Query Potentiation (+${deltaSyn} conductances) synced to .bin mmap`,
+    };
+  }
+
+  /**
+   * Exports the entire Crossbar Lattice, Vocabulary, CSR TypedArrays, Narrative Molecules,
+   * and Thermodynamic Tables into a compact, zero-copy SCB1 Binary .bin Memory-Mapped Image.
+   *
+   * SCB1 Header Layout (64 bytes = 16 x 32-bit words):
+   * [0] magic = 0x53434231 ("SCB1")
+   * [1] version = 1
+   * [2] presetCode (0='5M', 1='25M', 2='100M')
+   * [3] vocabCount
+   * [4] activeSynapses
+   * [5] totalIngestedTokens
+   * [6] ingestedBooksCount
+   * [7] totalRawCharsTrained
+   * [8] totalWordStreamIndex
+   * [9] calibratedCStar (Float32 bits)
+   * [10] calibratedThTrans (Float32 bits)
+   * [11] jsonByteLength
+   * [12] mmapPlasticWriteCount
+   * [13..15] reserved
+   */
+  public exportBinaryMmap(): ArrayBuffer {
+    this.rebuildContiguousCSR();
+
+    const vocabCount = this.vocabList.length;
+    const synCount = this.activeSynapses;
+
+    // Compact serializable representation of auxiliary maps & molecules
+    const compactMolecules = this.molecules.map((m) => [
+      m.id,
+      m.lineageId,
+      m.docTitle,
+      m.sentenceIndex,
+      m.prevText,
+      m.focalText,
+      m.nextText,
+    ]);
+
+    const charFwdEntries: Array<[string, Array<[string, number]>]> = [];
+    this.charMemristorCrossbar.forEach((row, cA) => {
+      charFwdEntries.push([
+        cA,
+        Array.from(row.entries()).map(([cB, g]) => [cB, Math.round(g * 1000) / 1000]),
+      ]);
+    });
+
+    const charBwdEntries: Array<[string, Array<[string, number]>]> = [];
+    this.charBackwardCrossbar.forEach((row, cB) => {
+      charBwdEntries.push([
+        cB,
+        Array.from(row.entries()).map(([cA, g]) => [cA, Math.round(g * 1000) / 1000]),
+      ]);
+    });
+
+    // Keep top 100,000 word counts for instant thermodynamic lookup
+    const wordCountEntries = Array.from(this.wordCounts.entries()).slice(0, 100_000);
+    const wordStartEntries = Array.from(this.wordSentenceStartCounts.entries()).slice(0, 50_000);
+
+    const metaPayload = {
+      v: this.vocabList,
+      m: compactMolecules,
+      b: this.ingestedBookRegistry,
+      wc: wordCountEntries,
+      ws: wordStartEntries,
+      cf: charFwdEntries,
+      cb: charBwdEntries,
+      cal: this.calibrationArtifact,
+    };
+
+    const encoder = new TextEncoder();
+    const jsonBytes = encoder.encode(JSON.stringify(metaPayload));
+    const jsonByteLen = jsonBytes.byteLength;
+
+    // Calculate aligned TypedArray byte lengths (all 4-byte aligned)
+    const headerBytes = 64;
+    const rowPtrBytes = (vocabCount + 1) * 4;
+    const vocabArrBytes = vocabCount * 4; // rowCounts, tokenFreq, tokenStartFreq, tokenHfwd, tokenMu (5 arrays)
+    const synArrBytes = synCount * 4; // colHorizon, conductance, edgeSource, synapseLineage (4 arrays)
+
+    const binaryTypedBytes =
+      headerBytes + rowPtrBytes + vocabArrBytes * 5 + synArrBytes * 4;
+    const totalBytes = binaryTypedBytes + jsonByteLen;
+
+    const buffer = new ArrayBuffer(totalBytes);
+    const headerU32 = new Uint32Array(buffer, 0, 16);
+    const headerF32 = new Float32Array(buffer, 0, 16);
+
+    headerU32[0] = 0x53434231; // "SCB1"
+    headerU32[1] = 1;
+    headerU32[2] = this.preset === '5M' ? 0 : this.preset === '25M' ? 1 : 2;
+    headerU32[3] = vocabCount;
+    headerU32[4] = synCount;
+    headerU32[5] = this.totalIngestedTokens;
+    headerU32[6] = this.ingestedBooksCount;
+    headerU32[7] = this.totalRawCharsTrained;
+    headerU32[8] = this.totalWordStreamIndex;
+    headerF32[9] = this.calibratedCStar;
+    headerF32[10] = this.calibratedThTrans;
+    headerU32[11] = jsonByteLen;
+    headerU32[12] = this.mmapPlasticWriteCount;
+
+    let offset = headerBytes;
+
+    // 1. rowPtr (vocabCount + 1)
+    new Uint32Array(buffer, offset, vocabCount + 1).set(
+      this.rowPtr.subarray(0, vocabCount + 1)
+    );
+    offset += rowPtrBytes;
+
+    // 2. rowCounts (vocabCount)
+    new Uint32Array(buffer, offset, vocabCount).set(
+      this.rowCounts.subarray(0, vocabCount)
+    );
+    offset += vocabArrBytes;
+
+    // 3. tokenFreq (vocabCount)
+    new Uint32Array(buffer, offset, vocabCount).set(
+      this.tokenFreq.subarray(0, vocabCount)
+    );
+    offset += vocabArrBytes;
+
+    // 4. tokenStartFreq (vocabCount)
+    new Uint32Array(buffer, offset, vocabCount).set(
+      this.tokenStartFreq.subarray(0, vocabCount)
+    );
+    offset += vocabArrBytes;
+
+    // 5. tokenHfwd (vocabCount)
+    new Float32Array(buffer, offset, vocabCount).set(
+      this.tokenHfwd.subarray(0, vocabCount)
+    );
+    offset += vocabArrBytes;
+
+    // 6. tokenMu (vocabCount)
+    new Float32Array(buffer, offset, vocabCount).set(
+      this.tokenMu.subarray(0, vocabCount)
+    );
+    offset += vocabArrBytes;
+
+    // 7. colHorizon (synCount)
+    new Uint32Array(buffer, offset, synCount).set(
+      this.colHorizon.subarray(0, synCount)
+    );
+    offset += synArrBytes;
+
+    // 8. conductance (synCount)
+    new Float32Array(buffer, offset, synCount).set(
+      this.conductance.subarray(0, synCount)
+    );
+    offset += synArrBytes;
+
+    // 9. edgeSource (synCount)
+    new Uint32Array(buffer, offset, synCount).set(
+      this.edgeSource.subarray(0, synCount)
+    );
+    offset += synArrBytes;
+
+    // 10. synapseLineage (synCount)
+    new Uint32Array(buffer, offset, synCount).set(
+      this.synapseLineage.subarray(0, synCount)
+    );
+    offset += synArrBytes;
+
+    // 11. Auxiliary UTF-8 table
+    new Uint8Array(buffer, offset, jsonByteLen).set(jsonBytes);
+
+    this.mmapBinSizeBytes = totalBytes;
+    return buffer;
+  }
+
+  /**
+   * Maps a raw SCB1 Binary .bin ArrayBuffer directly into the Crossbar's TypedArrays
+   * and reconstructs the Forward-Star linked index & narrative molecules in milliseconds.
+   */
+  public importBinaryMmap(buffer: ArrayBuffer): boolean {
+    if (!buffer || buffer.byteLength < 64) return false;
+
+    const startTime = performance.now();
+    const headerU32 = new Uint32Array(buffer, 0, 16);
+    const headerF32 = new Float32Array(buffer, 0, 16);
+
+    if (headerU32[0] !== 0x53434231) {
+      return false;
+    }
+
+    const presetCode = headerU32[2];
+    const targetPreset: MemoryCapacityPreset =
+      presetCode === 0 ? '5M' : presetCode === 2 ? '100M' : '25M';
+    if (this.preset !== targetPreset) {
+      this.switchPreset(targetPreset);
+    }
+
+    const vocabCount = Math.min(headerU32[3], this.config.maxVocab);
+    const synCount = Math.min(headerU32[4], this.config.maxSynapses);
+    this.totalIngestedTokens = headerU32[5];
+    this.ingestedBooksCount = headerU32[6];
+    this.totalRawCharsTrained = headerU32[7];
+    this.totalWordStreamIndex = headerU32[8];
+    this.calibratedCStar = headerF32[9] || 4;
+    this.calibratedThTrans = headerF32[10] || 1.25;
+    const jsonByteLen = headerU32[11];
+    this.mmapPlasticWriteCount = headerU32[12] || 0;
+
+    let offset = 64;
+    const rowPtrBytes = (headerU32[3] + 1) * 4;
+    const vocabArrBytes = headerU32[3] * 4;
+    const synArrBytes = headerU32[4] * 4;
+
+    this.rowPtr.fill(0);
+    this.rowCounts.fill(0);
+    this.headEdge.fill(-1);
+    this.nextEdge.fill(-1);
+
+    this.rowPtr.set(new Uint32Array(buffer, offset, vocabCount + 1));
+    offset += rowPtrBytes;
+
+    this.rowCounts.set(new Uint32Array(buffer, offset, vocabCount));
+    offset += vocabArrBytes;
+
+    this.tokenFreq.set(new Uint32Array(buffer, offset, vocabCount));
+    offset += vocabArrBytes;
+
+    this.tokenStartFreq.set(new Uint32Array(buffer, offset, vocabCount));
+    offset += vocabArrBytes;
+
+    this.tokenHfwd.set(new Float32Array(buffer, offset, vocabCount));
+    offset += vocabArrBytes;
+
+    this.tokenMu.set(new Float32Array(buffer, offset, vocabCount));
+    offset += vocabArrBytes;
+
+    this.colHorizon.set(new Uint32Array(buffer, offset, synCount));
+    offset += synArrBytes;
+
+    this.conductance.set(new Float32Array(buffer, offset, synCount));
+    offset += synArrBytes;
+
+    this.edgeSource.set(new Uint32Array(buffer, offset, synCount));
+    offset += synArrBytes;
+
+    this.synapseLineage.set(new Uint32Array(buffer, offset, synCount));
+    offset += synArrBytes;
+
+    this.activeSynapses = synCount;
+
+    // Re-link Forward-Star headEdge & nextEdge in O(synCount) so online STDP can continue seamlessly
+    const maxAux = Math.min(synCount, this.nextEdge.length);
+    for (let e = maxAux - 1; e >= 0; e--) {
+      const src = this.edgeSource[e];
+      if (src < this.headEdge.length) {
+        this.nextEdge[e] = this.headEdge[src];
+        this.headEdge[src] = e;
+      }
+    }
+
+    // Decode UTF-8 metadata block
+    const jsonSlice = new Uint8Array(buffer, offset, jsonByteLen);
+    const decoder = new TextDecoder();
+    const meta = JSON.parse(decoder.decode(jsonSlice)) as {
+      v: string[];
+      m: Array<[string, number, string, number, string, string, string]>;
+      b: IngestedBookRecord[];
+      wc: Array<[string, number]>;
+      ws: Array<[string, number]>;
+      cf: Array<[string, Array<[string, number]>]>;
+      cb: Array<[string, Array<[string, number]>]>;
+      cal?: CorpusCalibrationArtifact;
+    };
+
+    this.vocabList = meta.v || [];
+    this.tokenToIdMap.clear();
+    this.lowerTokenToIdMap.clear();
+    for (let i = 0; i < this.vocabList.length; i++) {
+      const tok = this.vocabList[i];
+      this.tokenToIdMap.set(tok, i);
+      const low = tok.toLowerCase();
+      if (!this.lowerTokenToIdMap.has(low)) {
+        this.lowerTokenToIdMap.set(low, i);
+      }
+    }
+
+    this.ingestedBookRegistry = meta.b || [];
+    if (meta.cal) {
+      this.calibrationArtifact = meta.cal;
+    }
+
+    this.wordCounts = new Map(meta.wc || []);
+    this.wordSentenceStartCounts = new Map(meta.ws || []);
+    this.dynamicLexicon = new Set(this.wordCounts.keys());
+
+    this.charMemristorCrossbar.clear();
+    for (const [cA, entries] of meta.cf || []) {
+      this.charMemristorCrossbar.set(cA, new Map(entries));
+      this.uniqueCharSet.add(cA);
+    }
+
+    this.charBackwardCrossbar.clear();
+    for (const [cB, entries] of meta.cb || []) {
+      this.charBackwardCrossbar.set(cB, new Map(entries));
+    }
+
+    // Reconstruct Narrative Molecules & fast word transitions
+    this.molecules = [];
+    this.wordTransitions.clear();
+    this.wordBackwardTransitions.clear();
+    this.multiViewWordCouplings.forEach((m) => m.clear());
+    this.charDelayLineSynapses.clear();
+    this.charDelayLineLineages.clear();
+    this.charDelayEdgeCount = 0;
+
+    for (const item of meta.m || []) {
+      const [id, lineageId, docTitle, sentenceIndex, prevText, focalText, nextText] = item;
+      const toks = this.tokenize(focalText);
+      const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
+      const clauses = focalText
+        .split(/[;:]/)
+        .map((c) => c.trim())
+        .filter((c) => c.length > 4);
+      const lowerWords = toks
+        .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+        .filter((w) => w.length >= 2);
+
+      const mol: CrossbarNarrativeMolecule = {
+        id,
+        lineageId,
+        docTitle,
+        sentenceIndex,
+        prevText,
+        focalText,
+        nextText,
+        clauses: clauses.length > 0 ? clauses : [focalText],
+        tokenIds,
+        lowerWords,
+      };
+      this.molecules.push(mol);
+
+      // Re-crystallize H8 delay lines immediately for Live Plastic Crystal Memory molecules
+      if (docTitle === 'Live Plastic Crystal Memory') {
+        this.crystallizeMoleculeH8DelayLines(mol, 3, 0.22, 16);
+      }
+    }
+
+    this.recalibrateThermodynamics(startTime);
+    this.mmapBinSizeBytes = buffer.byteLength;
+    this.mmapLastSyncMs = Math.round((performance.now() - startTime) * 10) / 10;
+    this.mmapStatus = `MMAP ACTIVE (${(buffer.byteLength / (1024 * 1024)).toFixed(2)} MB .bin)`;
+    this.isMmapRestored = true;
+    return true;
+  }
+
+  /**
+   * Opens the browser's IndexedDB binary store for zero-copy ArrayBuffer persistence
+   */
+  private openMmapIndexedDB(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') {
+        return reject(new Error('IndexedDB unavailable'));
+      }
+      const req = indexedDB.open('synaptron_crystal_mmap_db', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('mmap_bins')) {
+          db.createObjectStore('mmap_bins');
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  /**
+   * Debounced background flush of the SCB1 binary .bin image to both:
+   * 1. Browser IndexedDB raw ArrayBuffer ('synaptron_crystal.bin')
+   * 2. Server POSIX file ('data/synaptron_crystal.bin' via POST /api/crystal/mmap.bin)
+   */
+  public scheduleBinaryMmapSync(delayMs: number = 120): void {
+    if (this.mmapSyncTimer) {
+      clearTimeout(this.mmapSyncTimer);
+    }
+    this.mmapSyncTimer = setTimeout(() => {
+      void this.syncToBinaryMmap();
+    }, delayMs);
+  }
+
+  public async syncToBinaryMmap(): Promise<boolean> {
+    try {
+      const t0 = performance.now();
+      const binBuffer = this.exportBinaryMmap();
+
+      // 1. Save to IndexedDB binary page store
+      try {
+        const db = await this.openMmapIndexedDB();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction('mmap_bins', 'readwrite');
+          tx.objectStore('mmap_bins').put(binBuffer, 'synaptron_crystal.bin');
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch {
+        // Ignore IndexedDB quota/private mode errors when server .bin is active
+      }
+
+      // 2. Stream raw binary ArrayBuffer to server /api/crystal/mmap.bin
+      const res = await fetch('/api/crystal/mmap.bin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: binBuffer,
+      });
+
+      const elapsed = Math.round((performance.now() - t0) * 10) / 10;
+      this.mmapLastSyncMs = elapsed;
+      const mb = (binBuffer.byteLength / (1024 * 1024)).toFixed(2);
+      if (res.ok) {
+        this.mmapStatus = `MMAP SYNCED · ${mb} MB .bin (${elapsed} ms)`;
+      } else {
+        this.mmapStatus = `MMAP LOCAL · ${mb} MB .bin (${elapsed} ms)`;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Restores the crystal from the persistent SCB1 .bin binary image (checks server
+   * data/synaptron_crystal.bin and browser IndexedDB, picking whichever has the richest vocabulary).
+   */
+  public async restoreFromBinaryMmap(): Promise<boolean> {
+    if (this.isMmapRestored && this.vocabList.length > 600) {
+      return true;
+    }
+
+    let idbBuffer: ArrayBuffer | null = null;
+    let idbVocab = 0;
+
+    try {
+      const db = await this.openMmapIndexedDB();
+      idbBuffer = await new Promise<ArrayBuffer | null>((resolve) => {
+        const tx = db.transaction('mmap_bins', 'readonly');
+        const req = tx.objectStore('mmap_bins').get('synaptron_crystal.bin');
+        req.onsuccess = () => resolve((req.result as ArrayBuffer) || null);
+        req.onerror = () => resolve(null);
+      });
+      if (idbBuffer && idbBuffer.byteLength >= 64) {
+        const h = new Uint32Array(idbBuffer, 0, 8);
+        if (h[0] === 0x53434231) idbVocab = h[3];
+      }
+    } catch {
+      // Ignore IDB error
+    }
+
+    let srvBuffer: ArrayBuffer | null = null;
+    let srvVocab = 0;
+
+    try {
+      const statusRes = await fetch('/api/crystal/status');
+      if (statusRes.ok) {
+        const status = await statusRes.json();
+        if (status.exists && status.byteLength >= 64) {
+          const binRes = await fetch('/api/crystal/mmap.bin');
+          if (binRes.ok) {
+            srvBuffer = await binRes.arrayBuffer();
+            if (srvBuffer && srvBuffer.byteLength >= 64) {
+              const h = new Uint32Array(srvBuffer, 0, 8);
+              if (h[0] === 0x53434231) srvVocab = h[3];
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore server fetch error
+    }
+
+    const winningBuffer =
+      srvVocab >= idbVocab && srvBuffer ? srvBuffer : idbBuffer || srvBuffer;
+
+    if (winningBuffer && winningBuffer.byteLength >= 64) {
+      const ok = this.importBinaryMmap(winningBuffer);
+      if (ok) {
+        // Ensure both tiers have the winning binary image
+        if (srvVocab < idbVocab && idbBuffer) {
+          void fetch('/api/crystal/mmap.bin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: idbBuffer,
+          });
+        }
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -2346,6 +3241,11 @@ export class WasmMemristorEngine {
       calibratedEntropyTh: this.calibratedThTrans,
       narrativeMoleculesCount: this.molecules.length,
       calibrationArtifact: this.calibrationArtifact,
+      mmapBinSizeBytes: this.mmapBinSizeBytes,
+      mmapLastSyncMs: this.mmapLastSyncMs,
+      mmapPlasticWriteCount: this.mmapPlasticWriteCount,
+      mmapStatus: this.mmapStatus,
+      plasticQueryLearningEnabled: this.plasticQueryLearningEnabled,
     };
   }
 
@@ -2356,6 +3256,9 @@ export class WasmMemristorEngine {
     this.activeSynapses = 0;
     this.totalIngestedTokens = 0;
     this.ingestedBooksCount = 0;
+    this.mmapPlasticWriteCount = 0;
+    this.mmapBinSizeBytes = 0;
+    this.mmapStatus = 'MMAP RESET';
     this.rowPtr.fill(0);
     this.rowCounts.fill(0);
     this.colHorizon.fill(0);
@@ -2373,9 +3276,17 @@ export class WasmMemristorEngine {
     this.horizonDelayWavefront.fill(0);
 
     this.seedFundamentalTokens();
+    void fetch('/api/crystal/mmap.bin', { method: 'DELETE' });
+    this.openMmapIndexedDB()
+      .then((db) => {
+        const tx = db.transaction('mmap_bins', 'readwrite');
+        tx.objectStore('mmap_bins').delete('synaptron_crystal.bin');
+      })
+      .catch(() => {});
   }
 }
 
 // Global singleton instance with Apple M4 25M default
 export const wasmCrossbarEngine = new WasmMemristorEngine('25M');
+
 
