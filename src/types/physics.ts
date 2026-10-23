@@ -219,6 +219,37 @@ export interface TriChamberTelemetry {
   catGateReason: string;
 }
 
+export interface BicameralMindTelemetry {
+  activeDominance: 'LEFT_ANALYTICAL' | 'RIGHT_DIALOGIC' | 'BICAMERAL_SYNTHESIS';
+  leftHemisphere: {
+    energyMv: number;
+    matchedSentence: string;
+    sourceBook: string;
+    activeSomas: string[];
+    moleculesCount: number;
+  };
+  rightHemisphere: {
+    energyMv: number;
+    matchedSentence: string;
+    sourceBook: string;
+    activeSomas: string[];
+    moleculesCount: number;
+    observerFrameTransformation: string;
+  };
+  corpusCallosum: {
+    phaseLockCoherence: number;
+    interHemisphericFluxUa: number;
+    relationalDipoleRatio: number;
+    callosalBridgeWords: string[];
+  };
+  frontalLobeOrchestrator: {
+    executiveDecision: string;
+    consciousStreamSummary: string;
+    activeTotalCsrSynapsesFired: number;
+    activeH8DelaySynapsesFired: number;
+  };
+}
+
 export interface MemoryRecallResult {
   query: string;
   matchedSentence: string;
@@ -237,6 +268,8 @@ export interface MemoryRecallResult {
     spaceGluons: number;
   };
   triChamber?: TriChamberTelemetry;
+  bicameral?: BicameralMindTelemetry;
 }
+
 
 

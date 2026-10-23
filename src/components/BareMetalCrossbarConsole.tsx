@@ -51,6 +51,9 @@ import {
   Download,
   Sparkles,
   RefreshCw,
+  RotateCcw,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface GutenbergCatalogBook {
@@ -128,6 +131,10 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const [synthesisResult, setSynthesisResult] = useState<CrossbarSynthesisResult | null>(null);
   const [generationSteps, setGenerationSteps] = useState<GenerationStepTelemetry[]>([]);
   const [latestStep, setLatestStep] = useState<GenerationStepTelemetry | null>(null);
+
+  // Reset Memory to 0 Confirmation States
+  const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
+  const [isResetting, setIsResetting] = useState<boolean>(false);
 
   // Dynamic Physical Parameters
   const [temperature, setTemperature] = useState<number>(0.16);
@@ -547,6 +554,42 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     e.target.value = '';
   };
 
+  // Reset Neuromorphic Crossbar Memory to 0 (Pristine Lattice)
+  const handleResetMemoryToZero = async () => {
+    setIsResetting(true);
+    try {
+      await wasmCrossbarEngine.clearMemory();
+      setTelemetry(wasmCrossbarEngine.getTelemetry());
+      setIngestedLedger([]);
+      setSynthesizedText('');
+      setSynthesisResult(null);
+      setGenerationSteps([]);
+      setLatestStep(null);
+      setPlasticFeedbackBanner(
+        '⚡ Neuromorphic memory successfully reset to 0: pristine lattice ready for retraining. All vocabulary, synapses, and .bin storage purged.'
+      );
+      soundEngine.playSomaDecay();
+    } finally {
+      setIsResetting(false);
+      setShowResetConfirm(false);
+    }
+  };
+
+  // Re-seed Foundational Bicameral Starter Corpora
+  const handleReseedStarterCorpora = async () => {
+    setIsResetting(true);
+    try {
+      await wasmCrossbarEngine.reseedStarterCorpora(epochs, learningRate);
+      setTelemetry(wasmCrossbarEngine.getTelemetry());
+      setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+      setPlasticFeedbackBanner('⚡ Foundational bicameral starter corpora re-seeded into crossbar.');
+      soundEngine.playHadronFormation();
+      handleExecuteSynthesis('What was the Time Machine made of?');
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   // Preset Query Selection
   const handleSelectPresetQuery = (p: PresetQuery) => {
     setSelectedPresetId(p.id);
@@ -737,6 +780,14 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                 <Upload className="w-3 h-3" />
                 <span>Map .bin</span>
               </button>
+              <button
+                onClick={() => setShowResetConfirm(true)}
+                className="px-2 py-0.5 rounded bg-rose-950/90 hover:bg-rose-900 text-rose-200 border border-rose-700/60 text-[10px] font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                title="Reset neuromorphic memory to 0 (purge all vocabulary, synapses, and .bin image to start fresh retraining)"
+              >
+                <RotateCcw className="w-3 h-3 text-rose-400" />
+                <span className="font-bold text-rose-300">Reset to 0</span>
+              </button>
             </div>
 
             <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-md border border-slate-800">
@@ -764,18 +815,59 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
           </div>
         </div>
 
+        {/* Confirmation Modal for Resetting Memory to 0 */}
+        {showResetConfirm && (
+          <div className="mt-3 p-3 bg-rose-950/80 border border-rose-600/70 rounded-lg flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+            <div className="flex items-center gap-2.5 max-w-2xl">
+              <div className="w-8 h-8 rounded-full bg-rose-900/90 border border-rose-500/60 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-4 h-4 text-rose-300 animate-pulse" />
+              </div>
+              <div>
+                <div className="text-rose-200 font-bold uppercase tracking-wider">
+                  RESET NEUROMORPHIC COMPUTER MEMORY TO 0?
+                </div>
+                <div className="text-rose-300/90 text-[11px] mt-0.5">
+                  This will purge all {telemetry.vocabSize.toLocaleString()} vocabulary somas,{' '}
+                  {telemetry.activeSynapseCount.toLocaleString()} active memristor synapses, and all narrative molecules,
+                  wiping the .bin image from storage so you can retrain from scratch.
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                disabled={isResetting}
+                className="px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-mono cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetMemoryToZero}
+                disabled={isResetting}
+                className="px-3.5 py-1.5 rounded bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs font-mono flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-950"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isResetting ? 'Purging Memory...' : 'Confirm: Reset to 0'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Real-time Hardware Metrics Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-3">
-          <div className="bg-slate-900/60 border border-slate-800/80 p-2 rounded">
+          <div
+            className="bg-slate-900/60 border border-slate-800/80 p-2 rounded"
+            title="Total active memristor junctions = 8-Horizon Word/Token CSR Synapses + Pauli-Orthogonal H8 Character Delay Line Synapses (k=2..16)"
+          >
             <div className="text-[10px] text-slate-400 font-mono flex items-center justify-between">
-              <span>ACTIVE SYNAPSES</span>
+              <span>ACTIVE MEMRISTORS</span>
               <Activity className="w-3 h-3 text-sky-400" />
             </div>
             <div className="text-base font-bold font-mono text-sky-300 tabular-nums mt-0.5">
               {telemetry.activeSynapseCount.toLocaleString()}
             </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-              CSR: {telemetry.tokenCsrSynapseCount.toLocaleString()} · H8: {telemetry.charDelaySynapseCount.toLocaleString()}
+            <div className="text-[9px] text-slate-400 font-mono mt-0.5 truncate">
+              Token CSR: <span className="text-sky-300">{telemetry.tokenCsrSynapseCount.toLocaleString()}</span> · Pauli H8: <span className="text-emerald-300">{telemetry.charDelaySynapseCount.toLocaleString()}</span>
             </div>
           </div>
 
@@ -834,7 +926,10 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
             </div>
           </div>
 
-          <div className="bg-slate-900/60 border border-slate-800/80 p-2 rounded">
+          <div
+            className="bg-slate-900/60 border border-slate-800/80 p-2 rounded"
+            title="Unique vocabulary somas in CSR matrix + Active Macro-Cortical Somas across Left Hemisphere (N1..N4) and Right Hemisphere (N5..N8)"
+          >
             <div className="text-[10px] text-slate-400 font-mono flex items-center justify-between">
               <span>VOCAB &amp; SOMAS</span>
               <Database className="w-3 h-3 text-purple-400" />
@@ -843,8 +938,8 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
               {telemetry.vocabSize.toLocaleString()}{' '}
               <span className="text-xs font-normal">words</span>
             </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-              Active: {telemetry.activeMacroSomas.map((s) => s.split('-')[0]).join(' → ')}
+            <div className="text-[9px] text-purple-300/90 font-mono mt-0.5 truncate">
+              L/R Somas: {telemetry.activeMacroSomas.map((s) => s.split('-')[0]).join(' ⇄ ')}
             </div>
           </div>
         </div>
@@ -1071,6 +1166,102 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
               ) : (
                 <div className="text-slate-500 italic py-2">
                   No response generated yet. Select a prompt or type your query above.
+                </div>
+              )}
+
+              {/* Bicameral Split-Brain Architecture: Left Hemisphere ⇄ Corpus Callosum ⇄ Right Hemisphere & Frontal Lobe Orchestrator */}
+              {synthesisResult && synthesisResult.bicameral && (
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono">
+                    <span className="text-amber-300 font-bold uppercase tracking-wider">
+                      🧠 BICAMERAL SPLIT-BRAIN ARCHITECTURE &amp; FRONTAL LOBE ORCHESTRATOR:
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded border font-bold ${
+                        synthesisResult.bicameral.activeDominance === 'BICAMERAL_SYNTHESIS'
+                          ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                          : synthesisResult.bicameral.activeDominance === 'RIGHT_DIALOGIC'
+                            ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                            : 'bg-sky-950/90 border-sky-500/50 text-sky-300'
+                      }`}
+                    >
+                      EXECUTIVE DOMINANCE: {synthesisResult.bicameral.activeDominance} (Gain ×
+                      {synthesisResult.bicameral.frontalLobeOrchestrator.executiveGain})
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] font-mono">
+                    {/* Left Hemisphere: Analytical & Book Crystal */}
+                    <div
+                      className={`rounded p-2 border ${
+                        synthesisResult.bicameral.activeDominance !== 'RIGHT_DIALOGIC'
+                          ? 'bg-sky-950/30 border-sky-500/50'
+                          : 'bg-slate-900/60 border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-sky-300 font-bold">
+                        <span>LEFT HEMISPHERE (BOOK)</span>
+                        <span>E_L = {synthesisResult.bicameral.leftHemisphere.resonanceMv} mV</span>
+                      </div>
+                      <div className="text-[9px] text-slate-400 mt-0.5 truncate">
+                        Crystal: {synthesisResult.bicameral.leftHemisphere.sourceCrystal}
+                      </div>
+                      <div className="text-[9px] text-sky-200/90 mt-1 line-clamp-2">
+                        &ldquo;{synthesisResult.bicameral.leftHemisphere.matchedSentence}&rdquo;
+                      </div>
+                      <div className="text-[9px] text-sky-400 mt-1">
+                        Somas: {synthesisResult.bicameral.leftHemisphere.activeSomas.map((s) => s.split('-')[0]).join(' → ')}
+                      </div>
+                    </div>
+
+                    {/* Corpus Callosum Commissure Bus */}
+                    <div className="rounded p-2 border bg-purple-950/25 border-purple-500/40 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center justify-between text-purple-300 font-bold">
+                          <span>CORPUS CALLOSUM BUS</span>
+                          <span>I_CC = {synthesisResult.bicameral.corpusCallosum.fluxCurrentUa} μA</span>
+                        </div>
+                        <div className="text-[9px] text-amber-300 mt-1 truncate">
+                          {synthesisResult.bicameral.corpusCallosum.parityTransformation}
+                        </div>
+                        <div className="text-[9px] text-slate-300 mt-0.5 truncate">
+                          P(Wave): &ldquo;{synthesisResult.bicameral.corpusCallosum.transformedQueryWave}&rdquo;
+                        </div>
+                      </div>
+                      <div className="text-[9px] text-purple-300 mt-1 flex justify-between">
+                        <span>Inter-Hemispheric Lock:</span>
+                        <b>{synthesisResult.bicameral.corpusCallosum.phaseCoherencePct}%</b>
+                      </div>
+                    </div>
+
+                    {/* Right Hemisphere: Dialogic & Live Plastic Experiential Crystal */}
+                    <div
+                      className={`rounded p-2 border ${
+                        synthesisResult.bicameral.activeDominance !== 'LEFT_ANALYTICAL'
+                          ? 'bg-emerald-950/30 border-emerald-500/50'
+                          : 'bg-slate-900/60 border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-emerald-300 font-bold">
+                        <span>RIGHT HEMISPHERE (PLASTIC)</span>
+                        <span>E_R = {synthesisResult.bicameral.rightHemisphere.resonanceMv} mV</span>
+                      </div>
+                      <div className="text-[9px] text-slate-400 mt-0.5 truncate">
+                        Crystal: {synthesisResult.bicameral.rightHemisphere.sourceCrystal}
+                      </div>
+                      <div className="text-[9px] text-emerald-200/90 mt-1 line-clamp-2">
+                        &ldquo;{synthesisResult.bicameral.rightHemisphere.matchedSentence}&rdquo;
+                      </div>
+                      <div className="text-[9px] text-emerald-400 mt-1">
+                        Somas: {synthesisResult.bicameral.rightHemisphere.activeSomas.map((s) => s.split('-')[0]).join(' → ')}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-900/80 border border-slate-800 rounded px-2.5 py-1 text-[10px] font-mono text-slate-300">
+                    <span className="text-amber-300 font-bold">FRONTAL LOBE ARBITRATION: </span>
+                    {synthesisResult.bicameral.frontalLobeOrchestrator.arbitrationReason}
+                  </div>
                 </div>
               )}
 
@@ -1406,6 +1597,28 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                     </>
                   )}
                 </button>
+
+                {/* Reset to 0 Button */}
+                <button
+                  onClick={() => setShowResetConfirm(true)}
+                  className="px-3 py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 text-rose-200 rounded font-mono text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="Purge all vocabulary, synapses, and .bin image to 0 before starting a fresh training run"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                  <span className="font-bold">Reset Crossbar to 0</span>
+                </button>
+
+                {/* Re-seed Starter Corpora if crossbar is at 0 */}
+                {telemetry.vocabSize === 0 && (
+                  <button
+                    onClick={handleReseedStarterCorpora}
+                    disabled={isResetting}
+                    className="px-3 py-2 bg-sky-950/80 hover:bg-sky-900 border border-sky-700/80 text-sky-200 rounded font-mono text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Re-seed Starter Corpora</span>
+                  </button>
+                )}
 
                 {/* Local Multi-Book File Upload (.txt / .md) */}
                 <input
@@ -1989,6 +2202,41 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
               <p className="text-[10px] text-slate-500">
                 Multi-pass STDP crystallization into Compressed Sparse Row (CSR) array buffers.
               </p>
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-slate-800/80">
+            <div className="bg-rose-950/30 border border-rose-900/60 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <RotateCcw className="w-4 h-4 text-rose-400" />
+                  <span className="text-xs font-bold text-rose-300 uppercase tracking-wider">
+                    PRISTINE LATTICE ZERO RESET &amp; STORAGE PURGE
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5 max-w-xl">
+                  Wipes all {telemetry.vocabSize.toLocaleString()} vocabulary somas, active memristor conductances, and narrative molecules to 0. Purges the persistent .bin image across OPFS, IndexedDB, and server disk for a clean retraining slate.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {telemetry.vocabSize === 0 && (
+                  <button
+                    onClick={handleReseedStarterCorpora}
+                    disabled={isResetting}
+                    className="px-3 py-1.5 rounded bg-sky-950/80 hover:bg-sky-900 text-sky-200 border border-sky-700/60 text-xs font-mono flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Re-seed Starter Corpora</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowResetConfirm(true)}
+                  className="px-3.5 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs font-mono flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-950"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Reset Memory to 0</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
