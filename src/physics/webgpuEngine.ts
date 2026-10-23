@@ -29,6 +29,17 @@ export interface WebGpuKernelMetrics {
   totalDispatches: number;
 }
 
+export interface CrossbarComputeMetrics {
+  dispatchTimeUs: number;
+  avgDispatchTimeUs: number;
+  totalCrossbarDispatches: number;
+  activeHorizons: number;
+  simulatedMemristors: number;
+  bandwidthGBs: number;
+  gflops: number;
+  timingHistory: number[];
+}
+
 export interface WebGPUStatus {
   isSupported: boolean;
   isInitialized: boolean;
@@ -43,6 +54,7 @@ export interface WebGPUStatus {
   workgroupSize: number;
   memory: WebGpuMemoryMetrics;
   kernel: WebGpuKernelMetrics;
+  crossbar: CrossbarComputeMetrics;
 }
 
 export class WebGPUAccelerator {
@@ -83,14 +95,84 @@ export class WebGPUAccelerator {
       estimatedGflops: 0,
       totalDispatches: 0,
     },
+    crossbar: {
+      dispatchTimeUs: 0,
+      avgDispatchTimeUs: 0,
+      totalCrossbarDispatches: 0,
+      activeHorizons: 8,
+      simulatedMemristors: 0,
+      bandwidthGBs: 0,
+      gflops: 0,
+      timingHistory: new Array(60).fill(0),
+    },
   };
 
+  public crossbarPipeline: GPUComputePipeline | null = null;
   private particleBuffer: GPUBuffer | null = null;
   private paramsBuffer: GPUBuffer | null = null;
   private readBuffer: GPUBuffer | null = null;
   private bindGroup: GPUBindGroup | null = null;
   private maxParticles: number = 1024;
   private isBenchmarking: boolean = false;
+
+  // WGSL Compute Shader for Parallel CSR Memristor Crossbar Resonance
+  public readonly crossbarWgslShaderCode = `
+    struct CrossbarUniforms {
+      vocabCount: u32,
+      horizonCount: u32,
+      refractoryHalfLife: f32,
+      temperature: f32,
+    };
+
+    @group(0) @binding(0) var<storage, read> colHorizon: array<u32>;
+    @group(0) @binding(1) var<storage, read> conductance: array<f32>;
+    @group(0) @binding(2) var<storage, read> rowPtr: array<u32>;
+    @group(0) @binding(3) var<storage, read> rowCounts: array<u32>;
+    @group(0) @binding(4) var<storage, read> wavefront: array<u32>;
+    @group(0) @binding(5) var<storage, read_write> refractoryPsi: array<f32>;
+    @group(0) @binding(6) var<storage, read_write> outCurrents: array<f32>;
+    @group(0) @binding(7) var<uniform> crossbarParams: CrossbarUniforms;
+
+    @compute @workgroup_size(256)
+    fn crossbar_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      let targetId = global_id.x;
+      if (targetId >= crossbarParams.vocabCount) {
+        return;
+      }
+
+      // Pauli-exclusion refractory recovery: dPsi/dt = (1.0 - Psi) / tau
+      let recRate = 1.0 / max(1.0, crossbarParams.refractoryHalfLife);
+      var psi = refractoryPsi[targetId];
+      if (psi < 1.0) {
+        psi = min(1.0, psi + (1.0 - psi) * recRate);
+        refractoryPsi[targetId] = psi;
+      }
+
+      var totalI: f32 = 0.0;
+      let hDecay = array<f32, 8>(1.0, 0.88, 0.76, 0.64, 0.52, 0.42, 0.33, 0.25);
+
+      // Multi-horizon Kirchhoff current summation across 8 delay lines
+      for (var delta = 0u; delta < crossbarParams.horizonCount; delta = delta + 1u) {
+        let sourceId = wavefront[delta];
+        if (sourceId == 0u || sourceId >= crossbarParams.vocabCount) {
+          continue;
+        }
+        let start = rowPtr[sourceId];
+        let count = rowCounts[sourceId];
+        for (var k = 0u; k < count; k = k + 1u) {
+          let idx = start + k;
+          let packed = colHorizon[idx];
+          let tId = (packed >> 8u) & 0xffffffu;
+          let edgeH = packed & 0xffu;
+          if (tId == targetId && edgeH == delta) {
+            totalI = totalI + conductance[idx] * hDecay[delta] * psi;
+          }
+        }
+      }
+
+      outCurrents[targetId] = totalI;
+    }
+  `;
 
   // WGSL Compute Shader with Shared Memory Tiling for Massively Parallel N-Body Interaction & Kinematics
   public readonly wgslShaderCode = `
@@ -289,6 +371,21 @@ export class WebGPUAccelerator {
         compute: {
           module: shaderModule,
           entryPoint: 'main',
+        },
+      });
+
+      // Compile WGSL crossbar shader module
+      const crossbarModule = this.device.createShaderModule({
+        label: 'Crossbar Memristor Compute Module',
+        code: this.crossbarWgslShaderCode,
+      });
+
+      this.crossbarPipeline = this.device.createComputePipeline({
+        label: 'Crossbar Memristor Compute Pipeline',
+        layout: 'auto',
+        compute: {
+          module: crossbarModule,
+          entryPoint: 'crossbar_main',
         },
       });
 
@@ -582,6 +679,256 @@ export class WebGPUAccelerator {
       gflops,
       particlesBenchmarked: sampleSize,
     };
+  }
+
+  private crossbarBuffers: {
+    colHorizon?: GPUBuffer;
+    conductance?: GPUBuffer;
+    rowPtr?: GPUBuffer;
+    rowCounts?: GPUBuffer;
+    wavefront?: GPUBuffer;
+    psi?: GPUBuffer;
+    currents?: GPUBuffer;
+    params?: GPUBuffer;
+    readCurrents?: GPUBuffer;
+    bindGroup?: GPUBindGroup;
+    allocatedSynapses: number;
+    allocatedVocab: number;
+  } = {
+    allocatedSynapses: 0,
+    allocatedVocab: 0,
+  };
+
+  /**
+   * Dispatches parallel CSR Crossbar Resonance Compute Pass on WebGPU
+   * Computes Kirchhoff Current Summation I_j = \sum_{\delta=0}^7 G_{ij}^{(\delta)} \cdot V_{t-\delta, i} \cdot \Psi_j
+   */
+  public async computeCrossbarResonance(
+    colHorizon: Uint32Array,
+    conductance: Float32Array,
+    rowPtr: Uint32Array,
+    rowCounts: Uint32Array,
+    wavefront: Uint32Array,
+    refractoryPsi: Float32Array,
+    outCurrents: Float32Array,
+    vocabCount: number,
+    activeSynapseCount: number,
+    refractoryHalfLife: number = 6.0,
+    temperature: number = 0.25
+  ): Promise<boolean> {
+    if (!this.device || !this.crossbarPipeline || vocabCount === 0) {
+      return false;
+    }
+
+    const tStart = performance.now();
+
+    try {
+      // Allocate or expand GPU buffers if capacity increased
+      const neededSynapses = Math.max(activeSynapseCount, 1024);
+      const neededVocab = Math.max(vocabCount, 512);
+
+      if (
+        !this.crossbarBuffers.colHorizon ||
+        this.crossbarBuffers.allocatedSynapses < neededSynapses ||
+        this.crossbarBuffers.allocatedVocab < neededVocab
+      ) {
+        // Free prior buffers
+        this.crossbarBuffers.colHorizon?.destroy();
+        this.crossbarBuffers.conductance?.destroy();
+        this.crossbarBuffers.rowPtr?.destroy();
+        this.crossbarBuffers.rowCounts?.destroy();
+        this.crossbarBuffers.wavefront?.destroy();
+        this.crossbarBuffers.psi?.destroy();
+        this.crossbarBuffers.currents?.destroy();
+        this.crossbarBuffers.params?.destroy();
+        this.crossbarBuffers.readCurrents?.destroy();
+
+        const synBytes = neededSynapses * 4;
+        const vocabBytes = neededVocab * 4;
+
+        this.crossbarBuffers.colHorizon = this.device.createBuffer({
+          label: 'Crossbar ColHorizon Buffer',
+          size: synBytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.conductance = this.device.createBuffer({
+          label: 'Crossbar Conductance Buffer',
+          size: synBytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.rowPtr = this.device.createBuffer({
+          label: 'Crossbar RowPtr Buffer',
+          size: vocabBytes + 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.rowCounts = this.device.createBuffer({
+          label: 'Crossbar RowCounts Buffer',
+          size: vocabBytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.wavefront = this.device.createBuffer({
+          label: 'Crossbar Wavefront Buffer',
+          size: 8 * 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.psi = this.device.createBuffer({
+          label: 'Crossbar Refractory Psi Buffer',
+          size: vocabBytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+        });
+
+        this.crossbarBuffers.currents = this.device.createBuffer({
+          label: 'Crossbar Currents Output Buffer',
+          size: vocabBytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+        });
+
+        this.crossbarBuffers.params = this.device.createBuffer({
+          label: 'Crossbar Params Uniform Buffer',
+          size: 16,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.readCurrents = this.device.createBuffer({
+          label: 'Crossbar Read Current Staging Buffer',
+          size: vocabBytes,
+          usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        });
+
+        this.crossbarBuffers.bindGroup = this.device.createBindGroup({
+          label: 'Crossbar BindGroup',
+          layout: this.crossbarPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.crossbarBuffers.colHorizon } },
+            { binding: 1, resource: { buffer: this.crossbarBuffers.conductance } },
+            { binding: 2, resource: { buffer: this.crossbarBuffers.rowPtr } },
+            { binding: 3, resource: { buffer: this.crossbarBuffers.rowCounts } },
+            { binding: 4, resource: { buffer: this.crossbarBuffers.wavefront } },
+            { binding: 5, resource: { buffer: this.crossbarBuffers.psi } },
+            { binding: 6, resource: { buffer: this.crossbarBuffers.currents } },
+            { binding: 7, resource: { buffer: this.crossbarBuffers.params } },
+          ],
+        });
+
+        this.crossbarBuffers.allocatedSynapses = neededSynapses;
+        this.crossbarBuffers.allocatedVocab = neededVocab;
+      }
+
+      // Write active data to GPU buffers
+      const activeSynBytes = activeSynapseCount * 4;
+      const activeVocabBytes = vocabCount * 4;
+
+      if (activeSynapseCount > 0) {
+        this.device.queue.writeBuffer(
+          this.crossbarBuffers.colHorizon!,
+          0,
+          colHorizon.buffer,
+          colHorizon.byteOffset,
+          activeSynBytes
+        );
+        this.device.queue.writeBuffer(
+          this.crossbarBuffers.conductance!,
+          0,
+          conductance.buffer,
+          conductance.byteOffset,
+          activeSynBytes
+        );
+      }
+
+      this.device.queue.writeBuffer(
+        this.crossbarBuffers.rowPtr!,
+        0,
+        rowPtr.buffer,
+        rowPtr.byteOffset,
+        activeVocabBytes
+      );
+      this.device.queue.writeBuffer(
+        this.crossbarBuffers.rowCounts!,
+        0,
+        rowCounts.buffer,
+        rowCounts.byteOffset,
+        activeVocabBytes
+      );
+      this.device.queue.writeBuffer(
+        this.crossbarBuffers.wavefront!,
+        0,
+        wavefront.buffer,
+        wavefront.byteOffset,
+        8 * 4
+      );
+      this.device.queue.writeBuffer(
+        this.crossbarBuffers.psi!,
+        0,
+        refractoryPsi.buffer,
+        refractoryPsi.byteOffset,
+        activeVocabBytes
+      );
+
+      // Pack uniform: [vocabCount, horizonCount, refractoryHalfLife, temperature]
+      const uniformBuffer = new ArrayBuffer(16);
+      const uViewU32 = new Uint32Array(uniformBuffer);
+      const uViewF32 = new Float32Array(uniformBuffer);
+      uViewU32[0] = vocabCount;
+      uViewU32[1] = 8;
+      uViewF32[2] = refractoryHalfLife;
+      uViewF32[3] = temperature;
+      this.device.queue.writeBuffer(this.crossbarBuffers.params!, 0, uniformBuffer);
+
+      // Encode and dispatch
+      const commandEncoder = this.device.createCommandEncoder({ label: 'Crossbar Encoder' });
+      const pass = commandEncoder.beginComputePass({ label: 'Crossbar Resonance Pass' });
+      pass.setPipeline(this.crossbarPipeline);
+      pass.setBindGroup(0, this.crossbarBuffers.bindGroup!);
+
+      const workgroupCount = Math.ceil(vocabCount / 256);
+      pass.dispatchWorkgroups(workgroupCount);
+      pass.end();
+
+      // Copy results back to staging
+      commandEncoder.copyBufferToBuffer(
+        this.crossbarBuffers.currents!,
+        0,
+        this.crossbarBuffers.readCurrents!,
+        0,
+        activeVocabBytes
+      );
+      this.device.queue.submit([commandEncoder.finish()]);
+
+      // Map staging buffer
+      await this.crossbarBuffers.readCurrents!.mapAsync(GPUMapMode.READ, 0, activeVocabBytes);
+      const mapped = new Float32Array(this.crossbarBuffers.readCurrents!.getMappedRange(0, activeVocabBytes));
+      outCurrents.set(mapped);
+      this.crossbarBuffers.readCurrents!.unmap();
+
+      const elapsedMs = performance.now() - tStart;
+      const elapsedUs = Math.max(1, Math.round(elapsedMs * 1000));
+
+      // Record crossbar telemetry
+      const cb = this.status.crossbar;
+      cb.dispatchTimeUs = elapsedUs;
+      cb.totalCrossbarDispatches++;
+      cb.simulatedMemristors = activeSynapseCount;
+      cb.timingHistory.push(elapsedUs);
+      if (cb.timingHistory.length > 60) cb.timingHistory.shift();
+
+      const sum = cb.timingHistory.reduce((a, b) => a + b, 0);
+      cb.avgDispatchTimeUs = Math.round(sum / cb.timingHistory.length);
+
+      const sec = elapsedUs / 1_000_000;
+      const totalBytes = activeSynBytes * 2 + activeVocabBytes * 3 + 16;
+      cb.bandwidthGBs = sec > 0 ? Math.round((totalBytes / sec / 1_000_000_000) * 100) / 100 : 0;
+      const flops = vocabCount * 8 * 4;
+      cb.gflops = sec > 0 ? Math.round((flops / sec / 1_000_000_000) * 100) / 100 : 0;
+
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

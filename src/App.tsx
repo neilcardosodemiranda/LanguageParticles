@@ -17,6 +17,7 @@ import { ParticlePhysicsTheoryModal } from './components/ParticlePhysicsTheoryMo
 import { GutenbergTrainer, SAMPLE_GUTENBERG_BOOKS } from './components/GutenbergTrainer';
 import { GpuPerformanceDashboard } from './components/GpuPerformanceDashboard';
 import { TemporalMultiscaleChamber } from './components/TemporalMultiscaleChamber';
+import { BareMetalCrossbarConsole } from './components/BareMetalCrossbarConsole';
 import {
   LetterParticle,
   SynapticNeuron,
@@ -31,8 +32,8 @@ export default function App() {
   // Instantiate singleton physics engine
   const engine = useMemo(() => new NeuromorphicPhysicsEngine(1100, 580), []);
 
-  // Active laboratory branch: isolated Temporal Multiscale Chamber vs. Linguistic Collider (Gutenberg Trainer)
-  const [activeLabBranch, setActiveLabBranch] = useState<'temporal_multiscale' | 'collider'>('collider');
+  // Active laboratory branch: Bare-Metal Crossbar vs. Linguistic Collider vs. Temporal Multiscale Chamber
+  const [activeLabBranch, setActiveLabBranch] = useState<'bare_metal_crossbar' | 'collider' | 'temporal_multiscale'>('bare_metal_crossbar');
 
   // UI States
   const [activeTool, setActiveTool] = useState<'sling' | 'well' | 'probe' | 'inspect'>('sling');
@@ -208,26 +209,40 @@ export default function App() {
           {/* Isolated Research Chamber Switcher */}
           <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-md mr-2">
             <button
-              onClick={() => setActiveLabBranch('temporal_multiscale')}
+              onClick={() => setActiveLabBranch('bare_metal_crossbar')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
-                activeLabBranch === 'temporal_multiscale'
-                  ? 'bg-cyan-600 text-white'
+                activeLabBranch === 'bare_metal_crossbar'
+                  ? 'bg-sky-600 text-white font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Temporal Multiscale Chamber</span>
+              <Cpu className="w-3.5 h-3.5" />
+              <span>Bare-Metal Crossbar</span>
+              <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-black/40 text-sky-200">
+                M4 25M
+              </span>
             </button>
             <button
               onClick={() => setActiveLabBranch('collider')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
                 activeLabBranch === 'collider'
-                  ? 'bg-sky-600 text-white'
+                  ? 'bg-sky-600 text-white font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Atom className="w-3.5 h-3.5" />
               <span>Linguistic Collider</span>
+            </button>
+            <button
+              onClick={() => setActiveLabBranch('temporal_multiscale')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+                activeLabBranch === 'temporal_multiscale'
+                  ? 'bg-cyan-600 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Temporal Multiscale</span>
             </button>
           </div>
 
@@ -301,7 +316,28 @@ export default function App() {
         </div>
       </header>
 
-      {activeLabBranch === 'temporal_multiscale' ? (
+      {activeLabBranch === 'bare_metal_crossbar' ? (
+        <main className="flex-1 p-3 max-w-[1600px] w-full mx-auto space-y-3">
+          <BareMetalCrossbarConsole
+            onInjectIntoCollider={(tokens) => {
+              setActiveLabBranch('collider');
+              tokens.forEach((t, i) => {
+                setTimeout(() => {
+                  const side = i % 2 === 0 ? 'left' : 'right';
+                  engine.injectBeam(
+                    t,
+                    side,
+                    4.5 + Math.random() * 2,
+                    false,
+                    (i - tokens.length / 2) * 12
+                  );
+                  setTick((tick) => tick + 1);
+                }, i * 140);
+              });
+            }}
+          />
+        </main>
+      ) : activeLabBranch === 'temporal_multiscale' ? (
         <TemporalMultiscaleChamber />
       ) : (
         /* Main Workspace Layout */

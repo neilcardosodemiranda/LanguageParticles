@@ -213,6 +213,74 @@ class NeuromorphicAudioEngine {
       // Silence
     }
   }
+
+  /**
+   * Particle Chirp / Synaptic Spurt
+   */
+  public playParticleChirp(freq: number = 440, type: string = 'sine') {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = type === 'antimatter' ? 'sawtooth' : type === 'matter' ? 'square' : 'sine';
+      osc.frequency.setValueAtTime(Math.max(80, Math.min(2400, freq)), now);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq * 0.4), now + 0.06);
+
+      gain.gain.setValueAtTime(0.04, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(now);
+      osc.stop(now + 0.08);
+    } catch {
+      // Silence
+    }
+  }
+
+  /**
+   * Beam pulse burst
+   */
+  public playBeamPulse(side: string, velocity: number) {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      const f = side === 'left' ? 320 : 480;
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, now);
+      osc.frequency.exponentialRampToValueAtTime(f * 1.5, now + 0.12);
+
+      gain.gain.setValueAtTime(0.08 * Math.min(1.0, velocity / 5), now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(now);
+      osc.stop(now + 0.15);
+    } catch {
+      // Silence
+    }
+  }
+
+  /**
+   * Hadron formation harmonic lock
+   */
+  public playHadronFormation() {
+    this.playWordFusion('LOCK');
+  }
 }
 
 export const soundEngine = new NeuromorphicAudioEngine();

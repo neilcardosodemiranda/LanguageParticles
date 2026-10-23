@@ -1,126 +1,126 @@
-# Implementation Plan: Gemini Temporal Multiscale Language Physics
+# Bare-Metal WASM + WebGPU Neuromorphic Crossbar Engine — Implementation Plan
 
-## 1. Scientific Scope & Isolation Guarantee
+> **Summary**: A bare-metal WebAssembly (SIMD) and WebGPU compute architecture designed for Apple Silicon (M4 16 GB Unified Memory) that scales the pure-physics neuromorphic computer from a small simulated substrate to millions of Compressed Sparse Row (CSR) memristors, enabling ultra-fast multi-book and conversational Q&A ingestion alongside real-time parallel crossbar resonance for fluent, autonomous conversational responses.
 
-We will construct a completely isolated experimental research branch at `experiments/gemini_temporal_multiscale_language_physics/` and expose an interactive **Temporal Multiscale Research Chamber** view in the web application alongside the existing Linguistic Collider.
+## User Review & Critical Decisions
 
-- **Strict Isolation**: Zero modifications will be made to any frozen M87R baseline files or external references. All new experimental computation, corpora, calibration artifacts, probes, and forensic reports are self-contained.
-- **Epistemological Separation**: Both the codebase documentation, UI telemetry, and generated scientific reports (`REPORT.md` and `docs/GEMINI_TEMPORAL_MULTISCALE_LANGUAGE_PHYSICS_REPORT.md`) will explicitly distinguish:
-  1. **Implemented Computation** (exact mathematical formulas, transition tensors, entropy measures, phase clocks, and orthogonality inner products executed in code),
-  2. **Physical Analogy** (quantum phase interference, Pauli exclusion, thermodynamic entropy, and crystal lattice delay lines),
-  3. **Experimentally Supported Result** (empirical metrics from Conditions A–L and Ablations 1–10 across the 3 unseen corpora),
-  4. **Hypothesis** (theoretical claims regarding emergent grammar and multi-perspective wisdom).
-- **Zero-Cheating & Anti-Leakage Protocol**: No LLMs, neural embeddings, POS taggers, syntactic parsers, lexical dictionaries, stopword/pronoun lists, or probe-conditioned thresholds will be used. An automated `source_audit.json` scanner will verify the absence of forbidden rules or probe-answer strings in the engine.
-
----
-
-## 2. Core Mathematical & Architectural Design
-
-### Level 1: Character-Level Channel (`charChannel.ts`)
-Treats characters (including case and punctuation) as elementary units:
-- **Metrics**: Empirical probability $P(c)$, forward transition $P(c_{t+1} \mid c_t)$, backward transition $P(c_{t-1} \mid c_t)$, complex phase angle $\theta_c(\tau)$ derived from relative position within token and recurrence interval $\Delta \tau_c$, character-pair bonding affinity $B(c_i, c_j) = \log \frac{P(c_i, c_j)}{P(c_i)P(c_j)}$, and orthographic/anagram perturbation sensitivity via phase-ordered character n-gram transport.
-
-### Level 2: Word-Level Channel (`wordChannel.ts`)
-Treats words as composite language molecules assembled from character sequences:
-- **Metrics**: Word identity hash, forward transition $P(w_{t+1} \mid w_t)$, backward transition $P(w_{t-1} \mid w_t)$, normalized sentence coordinate $s_{\text{pos}} \in [0, 1]$, recurrence interval distribution $\Delta \tau_w$, forward continuation Shannon entropy $H_{\text{fwd}}(w) = -\sum P(w' \mid w)\log_2 P(w' \mid w)$, backward constraint entropy $H_{\text{bwd}}(w) = -\sum P_{\text{bwd}}(w' \mid w)\log_2 P_{\text{bwd}}(w' \mid w)$, exponential temporal proximity kernel, and phrase/clause bonding strength across punctuation boundaries.
-
-### Level 3: Eight Synchronized Multi-Scale Temporal Views (`multiview.ts`)
-For every sequence $X = (x_0, x_1, \dots, x_{T-1})$, constructs 8 phase-locked observation horizons:
-- **View $v \in \{0, 1, \dots, 7\}$**: Observes the carrier sequence at temporal delay $\delta = v$ steps, evaluating cross-horizon transition couplings $P_v(x_t \mid x_{t-v})$ and phase coherence $\Phi_v(t) = e^{i(\phi(x_t) - \phi(x_{t-v}) - \omega_v)}$ without duplicating semantic facts.
-
-### Level 4: Forward, Present, and Backward Observation (`bidirectionalField.ts`)
-At each focal coordinate $t$ with horizon window $k=7$:
-- **Past Field**: $\mathcal{F}_{\text{past}}(t) = [x_{t-k}, \dots, x_{t-1}]$
-- **Present Field**: $\mathcal{F}_{\text{present}}(t) = x_t$
-- **Future Field**: $\mathcal{F}_{\text{future}}(t) = [x_{t+1}, \dots, x_{t+k}]$
-- **Bidirectional Consistency Score**:
-  $$C_{\text{total}} = a \cdot C_{\text{backward}} + b \cdot C_{\text{present}} + c \cdot C_{\text{forward}} + d \cdot C_{\text{reverse}}$$
-  where the weights $(a, b, c, d)$ are **automatically derived in Pass 1 solely from corpus statistics** (normalized inverse conditional entropies and forward-reverse KL symmetry of the corpus transition matrix, with $\sum \{a,b,c,d\} = 1$), never tuned on benchmark probes.
-
-### Level 5: Deterministic Temporal Event Clock (`temporalClock.ts`)
-Constructs an event clock vector $\vec{\tau}(t) = (\tau_{\text{seq}}(t), \Delta\tau_{\text{rec}}(t), \phi_{\text{offset}}(t), \kappa_{\text{boundary}}(t))$ for each token occurrence. Tests and quantifies separation across 7 structural regimes:
-1. Normal word order
-2. Role reversal ($A \to B \to C$ vs $C \to B \to A$)
-3. Repeated-token ambiguity (distinct occurrences of the same token in one sentence)
-4. Sentence-boundary transitions
-5. Cross-sentence anaphora / entity recurrence across adjacent sentences $\mathcal{M}(t) = [S(t-1), S(t), S(t+1)]$
-6. Valid paraphrase / clause reordering
-7. Unrelated recombination (chimeric splicing of unrelated sentences)
-
-### Level 6: Pauli-Exclusion-Inspired Compatibility Constraint (`pauliOrthogonality.ts`)
-Defines a state vector $\Ket{\psi(x, t)} = [\text{coord}(t), \text{dir\_role}(x, t), \text{phase}(x, t), \text{lineage}(x, t), \text{scale}]$.
-- Two candidate states occupying overlapping functional slots are penalized by an orthogonality factor:
-  $$\Omega(\psi_1, \psi_2) = 1 - \exp\left(-\frac{\|\vec{\sigma}(\psi_1) - \vec{\sigma}(\psi_2)\|^2}{\sigma_{\text{corpus}}^2}\right)$$
-  when their temporal coordinates collide under conflicting directional roles or incompatible contextual lineages.
-
-### Level 7: Operationalized "Wisdom" Multi-View Stability Score (`wisdomStability.ts`)
-Defines a rigorous quantitative stability metric $W(\text{candidate}) \in [0, 1]$ measuring cross-perspective agreement across:
-- Forward traversal, backward traversal, present-centered focal resonance, variance across Views $0\dots 7$, and Jensen-Shannon agreement between Character-level and Word-level channels.
+- **WASM + WebGPU Division of Labor**: We will use an in-memory WebAssembly (WASM) linear memory engine with typed flat arrays for high-throughput token ingestion, dynamic vocabulary hashing, and Spike-Timing-Dependent Plasticity (STDP) conductance updates, paired with a WebGPU compute pipeline (WGSL shaders) that maps the CSR memristor crossbar directly into unified VRAM for massively parallel forward/backward current summation ($I_j = \sum_i G_{ij} V_i \Psi_{\text{Pauli}}$) and Winner-Take-All (WTA) lateral inhibition.
+- **Memory Footprint & Apple M4 Capacity Presets**: Each sparse memristor synapse is packed into **8 bytes** (`targetTokenId: u16/u32`, `conductance: f16/f32`, `phaseDelay: u8`, `horizonMask: u8`). Users can dynamically switch between hardware capacity presets tailored to 16 GB Unified Memory:
+  - **5M Memristors** (~40 MB Unified Memory) — Instantaneous warm-up & rapid literary experiments
+  - **25M Memristors (Default M4 Preset)** (~200 MB Unified Memory) — Full multi-book library + conversational fluency
+  - **100M Memristors (Extreme Bare-Metal Scale)** (~800 MB Unified Memory) — Massive corpus assimilation within browser `maxStorageBufferBindingSize` limits
+- **Fluent Conversational Physics (No Backpropagation)**: Rather than relying on single-sentence retrieval or LLM matrix multiplication, conversational fluency emerges from **Multi-Horizon Crossbar Trajectory Synthesis**—combining 8 temporal delay lines ($\delta \in \{0..7\}$), bidirectional thermodynamic consistency, Pauli-exclusion refractory damping (preventing loops), and conversational phase-locking (`Prompt Wavefront` $\to$ `Resonant Answer Wavefront`).
 
 ---
 
-## 3. Unseen Corpora, Two-Pass Protocol, Conditions & Ablations
+## 1. Overview & Core Concept
 
-### Three Unseen Corpora (Distinct Styles & Languages)
-1. **Corpus 1 — Narrative (English Literary Narrative)**: *The Mysterious Affair at Styles / Classic Narrative Excerpt* (dense event sequencing, character interactions, spatial descriptions, and temporal progression).
-2. **Corpus 2 — Scientific / Philosophical (Natural Philosophy & Relativistic Physics)**: *Relativity & Natural Philosophy Treatise* (causal laws, conditional definitions, mathematical/logical implications, and directional dependencies).
-3. **Corpus 3 — Dialogue-Heavy & Multilingual (Portuguese / French / English Philosophical & Dramatic Dialogue)**: Multi-speaker conversational exchanges with rapid turn-taking, question-answer pairs, and multilingual Romance/English structural transitions.
+Traditional neural networks spend 99% of their compute budget on dense matrix multiplications and backpropagation across billions of static weights, fighting against hardware physics. In biological and physical neuromorphic systems, **thermodynamics, wave interference, and electrostatics perform 95% of the computation automatically**:
+1. **Kirchhoff's Current Law (Summation)** happens at the speed of light in parallel across crossbar columns.
+2. **Ohm's Law ($I = G \cdot V$)** performs synaptic weighting directly in place.
+3. **Pauli Orthogonality & Refractory Decay** naturally suppress repetitive loops and grammatical collisions without syntactic rule lists.
 
-### Strict Two-Pass Calibration & Evaluation Protocol
-- **Pass 1 (Blind Corpus Calibration)**: Ingests raw corpus text only. Computes quantile thresholds, transition tensors, entropy distributions, and $(a,b,c,d)$ coefficients. Saves `calibration_artifacts/<corpus_id>_pass1.json`.
-- **Runtime Reset**: Clears all in-memory state.
-- **Pass 2 (Frozen Artifact Evaluation)**: Loads only `calibration_artifacts/<corpus_id>_pass1.json` and evaluates held-out valid probes and adversarial traps (role-reversal traps, anagram perturbations, word-order scrambles, chimeric recombinations, and uncalibrated noise queries).
-
-### 12 Experimental Conditions (`A`–`L`) & 10 Ablations (`1`–`10`)
-- Full automated execution of Conditions **A** through **L** (including fresh-process deterministic replay verification) and Ablations **1** through **10**, recording all 16 required performance and diagnostic metrics into structured JSON/JSONL artifacts and the comprehensive Markdown reports.
+By moving away from JavaScript object allocations (`Map`, nested objects, garbage-collected strings) to **bare-metal C/C++-style flat linear memory via WebAssembly and WebGPU Storage Buffers**, a 16 GB Apple M4 iMac can host tens of millions of active memristive synapses in unified memory and stream thousands of words per second during training and conversational inference.
 
 ---
 
-## 4. Directory Structure & Generated Artifacts
+## 2. User Experience & Visual Design
+
+Following the **Science, Space & Biotech** precision instrumentation aesthetic, the interface operates as an empirical hardware-calibrated laboratory console:
+
+- **Aesthetic Direction & Color Palette**:
+  - **60% Primary Canvas**: Deep space obsidian (`#07090E`) and clinical slate (`#0B0E17`).
+  - **30% Structural Panels**: Flat instrument panels (`#111827`) with crisp `1px` hairline borders (`#1E293B`) and zero decorative bloat.
+  - **10% Calibrated Telemetry Accents**: Laser cyan (`#06B6D4`) for WebGPU compute dispatches, phosphor emerald (`#10B981`) for WASM STDP synaptic locking, and telemetry amber (`#F59E0B`) for resonant conversational wavefronts.
+- **Typography & Metric Discipline**:
+  - **Interface Labels**: Clean technical sans-serif (`IBM Plex Sans` / `Inter`).
+  - **Live Telemetry & Hardware Readouts**: Strict tabular monospace (`JetBrains Mono` / `font-mono tabular-nums`) with separated unit hierarchy (e.g., `25.00 M` memristors, `198.4 MB` VRAM, `412.8 µs` WGSL dispatch) to guarantee zero layout jitter during 60 FPS streaming.
+  - **Text-First Status Glyphs**: Hardware states reported with explicit semantic glyphs (`● M4 UNIFIED VRAM ARMED`, `▲ CSR REALLOCATION`, `● WASM SIMD ACTIVE`).
+- **Workspace Layout Architecture**:
+  - **Top Hardware & Laboratory Ribbon**: 3-zone bar featuring active laboratory branch switching (`Linguistic Collider`, `Bare-Metal WASM + WebGPU Crossbar`, `Temporal Multiscale Chamber`), live M4 memory allocation gauge, and hardware backend indicator.
+  - **Left Column — Corpus Streamer & Bare-Metal Capacity Controls**:
+    - Capacity Preset Selector (`5M`, `25M`, `100M` memristors) with real-time byte-level RAM/VRAM breakdown (`8 bytes / synapse`).
+    - Multi-Book & Conversational Dialogue Pack Loader (built-in Gutenberg library, Scientific Dialogues, Conversational Q&A packs, plus drag-and-drop multi-file `.txt` / `.json` streaming).
+    - STDP Physical Hyperparameters: Learning rate ($\eta$), temporal horizon depth ($\delta = 0..7$), refractory decay ($\tau_{\text{ref}}$), and Pauli exclusion strength ($\Omega$).
+  - **Center Stage — Interactive Conversational Resonance Terminal & Crossbar Matrix**:
+    - **Live Conversational Prompt & Token-by-Token Wavefront Streamer**: Ask open-ended or book-specific questions and watch the WebGPU crossbar synthesize fluent multi-clause responses token-by-token, displaying the active H0–H7 soma firing path, real-time conductance current ($I = G \cdot V \cdot \Psi$), and stuttering/loop suppression ratio.
+    - **Hardware Crossbar Conductance Heatmap & Spike Raster**: High-density canvas visualizing active CSR row/column current summation, top resonant candidate tokens, and lateral inhibition competition.
+  - **Bottom Tray — WASM + WebGPU Kernel Profiler**:
+    - Live comparison of WASM STDP ingestion speed (`tokens/sec`, `synapses updated/sec`), WebGPU compute pass latency (`µs`), workgroup occupancy, and unified memory bandwidth (`GB/s`).
+
+---
+
+## 3. Key Product Decisions & Trade-Offs
+
+### Decision 1: Compressed Sparse Row (CSR) Linear Layout vs. Dense Crossbar Matrix
+- **Trade-Off**: A dense $100,000 \times 100,000$ vocabulary crossbar requires $10^{10}$ floats ($40\text{ GB}$ of RAM), which overflows a 16 GB iMac. Natural language, however, follows a power-law sparsity distribution where each word or character only forms meaningful multi-horizon transitions with a bounded local neighborhood.
+- **Resolution**: We implement a **Dynamic Block-CSR (Compressed Sparse Row) Flat Pool** in shared `ArrayBuffer` / WebAssembly linear memory. Each synapse consumes exactly **8 bytes** (`targetId: u32`, `conductance_fp16: u16`, `horizon_phase: u16`). This allows **25,000,000 memristors to fit in just 200 MB of Unified Memory**, leaving over 15 GB of headroom on an M4 iMac.
+
+### Decision 2: Compiled In-Memory WASM Binary Kernel + WGSL Compute Shader
+- **Trade-Off**: External `.wasm` binary fetches can fail or require complex external build toolchains in browser sandboxes, while pure JavaScript loops bottleneck on bitwise hashing and STDP decay over millions of edges.
+- **Resolution**: We construct an **inline WebAssembly SIMD-compatible binary module** (compiled directly from structured WASM bytecode / typed memory kernels at initialization) operating over a shared `WebAssembly.Memory` arena, paired with a **WebGPU Compute Pipeline (WGSL)** that binds the exact same flat CSR arrays (`rowPtr`, `colIdx`, `conductance`, `tokenPotentials`) in GPU `storage` buffers for parallel inference.
+
+### Decision 3: Conversational Fluency via Multi-Horizon Trajectory Synthesis
+- **Trade-Off**: Standard Markov chains or single-step bigram crossbars lose context after 2–3 words, while pure sentence retrieval cannot synthesize novel conversational replies.
+- **Resolution**: During inference, the WebGPU shader evaluates **8 simultaneous temporal delay horizons ($\delta \in \{0..7\}$)** anchored by the query's semantic attractor nodes. Each generated token updates a sliding **Active Context Wavefront** ($V_{t}, V_{t-1}, \dots, V_{t-7}$) and applies **Pauli Refractory Inhibition** to recently fired somas, driving a smooth, grammatically coherent trajectory across sentence boundaries until a natural thermodynamic ground state (punctuation attractor) is reached.
+
+---
+
+## 4. Technical Architecture & Data Strategy
+
+### End-to-End Bare-Metal Pipeline Diagram
 
 ```text
-experiments/gemini_temporal_multiscale_language_physics/
-├── src/
-│   ├── types.ts
-│   ├── corpora.ts
-│   ├── charChannel.ts
-│   ├── wordChannel.ts
-│   ├── multiview.ts
-│   ├── bidirectionalField.ts
-│   ├── temporalClock.ts
-│   ├── pauliOrthogonality.ts
-│   ├── wisdomStability.ts
-│   ├── engine.ts
-│   ├── runner.ts
-│   └── generateArtifacts.ts
-├── calibration_artifacts/
-│   ├── narrative_en_pass1.json
-│   ├── scientific_phil_pass1.json
-│   └── dialogue_multilingual_pass1.json
-├── REPORT.md
-├── telemetry.jsonl
-├── results.json
-├── ablation_matrix.json
-├── temporal_clock_analysis.json
-├── backward_forward_consistency.json
-├── multiview_stability.json
-├── orthogonality_analysis.json
-├── source_audit.json
-├── integrity_pre.json
-├── integrity_post.json
-└── FROZEN_CERTIFICATION_SEAL.json
-docs/
-└── GEMINI_TEMPORAL_MULTISCALE_LANGUAGE_PHYSICS_REPORT.md
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                   CORPUS & CONVERSATIONAL Q&A STREAMER                       │
+│     Gutenberg Books + Multi-Turn Q&A Packs + Drag-and-Drop File Chunks       │
+└──────────────────────────────────────┬───────────────────────────────────────┘
+                                       │ Raw UTF-8 Byte / Token Stream
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│              WASM LINEAR MEMORY ENGINE (STDP & CSR COMPILER)                 │
+│  ┌─────────────────────────┐  ┌──────────────────────┐  ┌─────────────────┐  │
+│  │ FNV-1a / Robin-Hood     │  │ 8-Horizon Delay Line │  │ 8-Byte Synapse  │  │
+│  │ Vocabulary Hash Table   │─▶│ Circular Spike Ring  │─▶│ CSR Arena Pool  │  │
+│  │ (Zero GC String Alloc)  │  │ (δ = 0..7 Horizons)  │  │ (5M–100M Edges) │  │
+│  └─────────────────────────┘  └──────────────────────┘  └────────┬────────┘  │
+└──────────────────────────────────────────────────────────────────┼───────────┘
+                                                                   │ Zero-Copy /
+                                                                   │ Fast Queue Write
+                                                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│           APPLE M4 UNIFIED MEMORY — WEBGPU COMPUTE ENGINE (WGSL)             │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │ Storage Buffers: row_ptr<u32> | col_idx<u32> | cond_phase<u32> | V<f32>│  │
+│  └───────────────────────────────────┬────────────────────────────────────┘  │
+│                                      ▼                                       │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │ @compute @workgroup_size(256) fn crossbar_resonance_pass()             │  │
+│  │   • Parallel Kirchhoff Current Summation: I_j = Σ G_ij · V_i(δ)        │  │
+│  │   • Bidirectional Context Attractor Resonance (Query Target Locking)   │  │
+│  │   • Pauli-Exclusion Refractory Suppression & Lateral Inhibition (WTA)  │  │
+│  └───────────────────────────────────┬────────────────────────────────────┘  │
+└──────────────────────────────────────┼───────────────────────────────────────┘
+                                       │ Staging Readback (Top-K Resonant Somas)
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│               CONVERSATIONAL WAVEFRONT & TELEMETRY CONSOLE                   │
+│   Real-Time Token Stream • 8-Soma Phase Oscilloscope • VRAM/GFLOPs Profiler  │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
----
+### Flat Binary Data Structures (Zero-GC Layout)
 
-## 5. Interactive Laboratory UI Design (`Science, Space & Biotech` Reference)
-
-We will add a dedicated mode switcher in the application workspace so you can toggle seamlessly between the **Linguistic Particle Collider** and the new **Temporal Multiscale Physics Chamber**:
-- **Visual Direction**: Deep space obsidian (`#07090E`) canvas, flat slate structural panels (`#111827`), crisp `1px` hairline borders (`#1E293B`), precision cyan (`#06B6D4`) and telemetry amber (`#F59E0B`) accents, and `font-mono tabular-nums` across all numeric readouts.
-- **Interactive Views**:
-  1. **Live 8-View Temporal Phase & Bidirectional Field Inspector**: Enter any query or probe against any of the 3 unseen corpora (or custom corpus text) and inspect Past/Present/Future fields, $C_{\text{backward}}, C_{\text{present}}, C_{\text{forward}}, C_{\text{reverse}}$, View $0\dots 7$ phase coherence, and Character-vs-Word agreement.
-  2. **12-Condition (`A`–`L`) & 10-Ablation Matrix Comparator**: Side-by-side tabular comparison of Valid Recall, Trap Rejection, False Rejections, False-Positive Leaks, Anagram/Order Sensitivity, and Wisdom Stability Score.
-  3. **Temporal Clock & Pauli Orthogonality Diagnostic**: Visual radar/matrix readout showing how the deterministic event clock and Pauli compatibility constraint separate normal order, role reversal, repeated tokens, and chimeric traps.
-  4. **Pass 1 / Pass 2 Calibration, Source Audit & Report Explorer**: Inspect the raw Pass-1 calibration JSON artifacts, zero-leakage source audit verification, and the full scientific report with honest failure analysis.
+1. **Vocabulary Node Table (`SoA` - Structure of Arrays)**:
+   - `tokenHash: Uint32Array` — 32-bit FNV-1a hash of each unique word/punctuation token.
+   - `tokenFreq: Uint32Array` — Empirical corpus count for thermodynamic baseline entropy $H(w)$ and inverse-frequency salience weighting.
+   - `tokenRolePhase: Float32Array` — Mean normalized sentence position $s_{\text{pos}} \in [0, 1]$ and directional flow polarity.
+2. **Compressed Sparse Row (CSR) Memristor Crossbar**:
+   - `csrRowPtr: Uint32Array (size: V + 1)` — Start and end indices in the synapse pool for source token $i$.
+   - `csrColAndHorizon: Uint32Array (size: M)` — Packed 32-bit word: `[31..8: targetTokenId (24 bits, up to 16.7M vocab) | 7..0: horizonMask & phase bin (8 bits)]`.
+   - `csrConductance: Float32Array` (or packed `Uint32Array` with `f16` forward/backward conductance $G_{\text{fwd}}, G_{\text{bwd}}$) — Synaptic conductance updated via STDP rule:
+     $$\Delta G_{ij}(\delta) = \eta \cdot \exp\left(-\frac{\delta}{\tau_{\text{STDP}}}\right) \cdot \left(1 - G_{ij}\right)$$
+3. **Interactive State & Verification Roadmap**:
+   - **Phase 1**: Build the **Bare-Metal WASM + CSR Memory Pool** and extend the WebGPU engine with the **WGSL Crossbar Resonance Compute Pipeline** alongside the existing particle kinematics kernel.
+   - **Phase 2**: Integrate the **Multi-Book + Conversational Q&A Corpus Streamer** with built-in Gutenberg books, scientific Q&A dialogues, and chunked file ingestion capable of processing 500,000+ tokens/sec.
+   - **Phase 3**: Build the **Bare-Metal Crossbar Console & Conversational Resonance UI** within the Gutenberg Trainer / Collider workspace, featuring live M4 VRAM telemetry, capacity scaling (`5M` / `25M` / `100M`), and autonomous conversational Q&A synthesis.

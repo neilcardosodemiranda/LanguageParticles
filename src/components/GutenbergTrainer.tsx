@@ -256,7 +256,9 @@ export const GutenbergTrainer: React.FC<GutenbergTrainerProps> = ({
                     <div className="font-bold text-xs text-slate-100 mb-1 flex items-center justify-between gap-1">
                       <span className="truncate">{book.title}</span>
                       {isTrained && (
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" title="Indexed in Crystal" />
+                        <span title="Indexed in Crystal" className="shrink-0 flex items-center">
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        </span>
                       )}
                     </div>
                     <div className="text-[10px] text-slate-400 font-mono mb-1.5">
@@ -580,6 +582,12 @@ export const GutenbergTrainer: React.FC<GutenbergTrainerProps> = ({
             className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 transition-colors cursor-pointer"
           >
             "What was the Time Machine made of?"
+          </button>
+          <button
+            onClick={() => handleExecuteMemoryQuery('What do the two levers on the Time Machine do?')}
+            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-teal-300 transition-colors cursor-pointer"
+          >
+            "What do the two levers on the Time Machine do?"
           </button>
           <button
             onClick={() => handleExecuteMemoryQuery('What awakened the creature in Frankenstein?')}
