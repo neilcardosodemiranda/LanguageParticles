@@ -13,9 +13,15 @@ import { ParticlePenToolbar } from './components/ParticlePenToolbar';
 import { FieldModulatorPanel } from './components/FieldModulatorPanel';
 import { InspectorDrawer } from './components/InspectorDrawer';
 import { ParticlePhysicsTheoryModal } from './components/ParticlePhysicsTheoryModal';
-import { LetterParticle, SynapticNeuron, ComputerTelemetry } from './types/physics';
+import { GutenbergTrainer, SAMPLE_GUTENBERG_BOOKS } from './components/GutenbergTrainer';
+import {
+  LetterParticle,
+  SynapticNeuron,
+  ComputerTelemetry,
+  BookTrainingStats,
+} from './types/physics';
 import { soundEngine } from './utils/audio';
-import { Atom, BookOpen, RotateCcw, Volume2, VolumeX, Sparkles } from 'lucide-react';
+import { Atom, BookOpen, RotateCcw, Volume2, VolumeX, Sparkles, Database } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export default function App() {
@@ -28,6 +34,7 @@ export default function App() {
   const [isAntimatter, setIsAntimatter] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [isTheoryOpen, setIsTheoryOpen] = useState<boolean>(false);
+  const [showTrainer, setShowTrainer] = useState<boolean>(true);
 
   // Inspected objects
   const [inspectedParticle, setInspectedParticle] = useState<LetterParticle | null>(null);
@@ -45,8 +52,12 @@ export default function App() {
     return () => clearInterval(timer);
   }, [engine]);
 
-  // Initial setup: spawn introductory demonstration particles
+  // Initial setup: prime engine with Alice in Wonderland (so golden key and wonderland vocabulary exist)
   useEffect(() => {
+    const aliceBook = SAMPLE_GUTENBERG_BOOKS[0];
+    if (aliceBook) {
+      engine.trainOnText(aliceBook.text, aliceBook.title, 2, 0.12);
+    }
     engine.injectBeam('QUANTUM', 'left', 5.5, false, -30);
     engine.injectBeam('NEURON', 'right', 5.5, false, 30);
   }, [engine]);
@@ -120,6 +131,29 @@ export default function App() {
     setTick((t) => t + 1);
   };
 
+  // Export current particle coordinates, velocities, and momentum as JSON
+  const handleExportState = () => {
+    const jsonString = engine.exportState();
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `particle_collider_state_${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Import and resume saved particle configuration
+  const handleImportState = (jsonString: string) => {
+    const success = engine.importState(jsonString);
+    if (success) {
+      setTick((t) => t + 1);
+      setTelemetry({ ...engine.telemetry });
+    }
+  };
+
   // Celebrate when multiple stable words form
   useEffect(() => {
     if (telemetry.stableHadrons > 0 && telemetry.stableHadrons % 3 === 0) {
@@ -163,6 +197,23 @@ export default function App() {
         {/* Global Controls */}
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setShowTrainer(!showTrainer)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-medium transition-colors cursor-pointer ${
+              showTrainer
+                ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-amber-300'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span>Gutenberg Trainer</span>
+            {engine.trainingStats.totalWordsParsed > 0 && (
+              <span className="bg-amber-950/80 text-amber-200 text-[10px] px-1.5 py-0.2 rounded font-mono">
+                {engine.trainingStats.uniqueVocabularyCount}w
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setIsTheoryOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-sky-300 font-medium transition-colors cursor-pointer"
           >
@@ -201,6 +252,26 @@ export default function App() {
         {/* Upper Real-Time Telemetry HUD */}
         <PhysicsHUD telemetry={telemetry} />
 
+        {/* Project Gutenberg Book Trainer & Pattern Extractor (Collapsible) */}
+        {showTrainer && (
+          <GutenbergTrainer
+            engine={engine}
+            onTrainingComplete={(stats: BookTrainingStats) => {
+              setTick((t) => t + 1);
+              setTelemetry({ ...engine.telemetry });
+              confetti({
+                particleCount: 40,
+                spread: 70,
+                origin: { y: 0.6 },
+                colors: ['#38bdf8', '#fbbf24', '#34d399'],
+              });
+            }}
+            onInjectPredictedParticles={(tokens: string[]) => {
+              setTick((t) => t + 1);
+            }}
+          />
+        )}
+
         {/* Interactive Vacuum Chamber & Particle Pen */}
         <div className="space-y-2">
           {/* Particle Pen & Interaction Toolbar */}
@@ -213,6 +284,13 @@ export default function App() {
             setIsAntimatter={setIsAntimatter}
             soundEnabled={soundEnabled}
             setSoundEnabled={setSoundEnabled}
+            isPaused={engine.isPaused}
+            onTogglePause={() => {
+              engine.isPaused = !engine.isPaused;
+              setTick((t) => t + 1);
+            }}
+            onExportState={handleExportState}
+            onImportState={handleImportState}
           />
 
           {/* Main 60 FPS Collider Vacuum Canvas */}

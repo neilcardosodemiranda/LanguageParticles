@@ -152,6 +152,14 @@ export const ColliderCanvas: React.FC<ColliderCanvasProps> = ({
     if (isDragging && dragStart && dragCurrent && activeTool === 'sling') {
       drawSlingshot(ctx, dragStart, dragCurrent);
     }
+
+    // 11. Paused Indicator
+    if (engine.isPaused) {
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('⏸ SIMULATION PAUSED [COORDINATES & MOMENTUM FROZEN]', width / 2, 24);
+    }
   };
 
   const drawBeamPorts = (ctx: CanvasRenderingContext2D, width: number, height: number) => {

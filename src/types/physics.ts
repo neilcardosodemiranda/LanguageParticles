@@ -58,6 +58,7 @@ export interface SynapticNeuron {
   y: number;
   radius: number;
   core: 'alpha' | 'beta' | 'gamma' | 'delta';
+  specialization: string; // e.g. "Vowel Leptons (A,E,I,O,U)", "Plosive Quarks (P,T,K,B)", etc.
   membranePotential: number; // -70mV rest to -50mV threshold
   threshold: number; // -50mV
   restPotential: number; // -70mV
@@ -68,6 +69,19 @@ export interface SynapticNeuron {
   weights: Record<string, number>; // memristor connection to other neuron IDs
   lastSpikeVisual: number; // 0 to 1 for rendering glow
   accumulatedCurrent: number;
+  learnedTokens: string[]; // n-grams / words tuned to this soma
+}
+
+export interface BookTrainingStats {
+  bookTitle: string;
+  totalWordsParsed: number;
+  uniqueVocabularyCount: number;
+  patternsExtracted: number;
+  topBigrams: Array<{ bigram: string; count: number; weight: number }>;
+  topWords: Array<{ word: string; frequency: number }>;
+  trainingEpoch: number;
+  stdpPotentiatedSynapses: number;
+  isTraining: boolean;
 }
 
 export interface AttractorWell {
@@ -142,4 +156,14 @@ export interface ComputerTelemetry {
   annihilationsCount: number;
   recognizedWords: string[];
   recentSpikes: Array<{ neuronId: string; time: number; core: string }>;
+}
+
+export interface MemoryRecallResult {
+  query: string;
+  matchedSentence: string;
+  sourceBook: string;
+  answerPhrase: string;
+  predictedTokens: string[];
+  resonanceScore: number;
+  activePathways: string[];
 }

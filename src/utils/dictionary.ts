@@ -131,15 +131,23 @@ export function getLetterParticleProperties(char: string, isAntimatter: boolean 
   };
 }
 
-export function checkWordStability(letters: string[]): { isStable: boolean; word: string } {
+export function checkWordStability(
+  letters: string[],
+  dynamicLexicon?: Set<string>
+): { isStable: boolean; word: string } {
   const word = letters.join('').toUpperCase();
-  if (STABLE_LEXICON.has(word)) {
+  if (STABLE_LEXICON.has(word) || (dynamicLexicon && dynamicLexicon.has(word))) {
     return { isStable: true, word };
   }
   // Any 3+ letter string with at least one vowel and one consonant has partial stability
   const hasVowel = /[AEIOUY]/.test(word);
   const hasConsonant = /[BCDFGHJKLMNPQRSTVWXZ]/.test(word);
-  if (word.length >= 3 && hasVowel && hasConsonant && STABLE_LEXICON.has(word)) {
+  if (
+    word.length >= 3 &&
+    hasVowel &&
+    hasConsonant &&
+    (STABLE_LEXICON.has(word) || (dynamicLexicon && dynamicLexicon.has(word)))
+  ) {
     return { isStable: true, word };
   }
   return { isStable: false, word };

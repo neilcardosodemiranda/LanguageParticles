@@ -15,6 +15,8 @@ import {
   CollisionFlash,
   SimulationSettings,
   ComputerTelemetry,
+  BookTrainingStats,
+  MemoryRecallResult,
 } from '../types/physics';
 import {
   getLetterParticleProperties,
@@ -32,6 +34,26 @@ export class NeuromorphicPhysicsEngine {
   public attractors: AttractorWell[] = [];
   public barriers: QuantumBarrier[] = [];
   public flashes: CollisionFlash[] = [];
+
+  // Simulation execution state
+  public isPaused: boolean = false;
+
+  // Book pattern extraction & dynamic memory storage
+  public dynamicLexicon: Set<string> = new Set();
+  public dynamicBigrams: Map<string, number> = new Map();
+  public wordTransitions: Map<string, Map<string, number>> = new Map();
+  public storedPassages: Array<{ bookTitle: string; text: string; sentences: string[] }> = [];
+  public trainingStats: BookTrainingStats = {
+    bookTitle: 'Not Trained',
+    totalWordsParsed: 0,
+    uniqueVocabularyCount: 0,
+    patternsExtracted: 0,
+    topBigrams: [],
+    topWords: [],
+    trainingEpoch: 0,
+    stdpPotentiatedSynapses: 0,
+    isTraining: false,
+  };
 
   public width: number = 1000;
   public height: number = 650;
@@ -94,6 +116,16 @@ export class NeuromorphicPhysicsEngine {
     const ry = Math.min(180, this.height * 0.28);
 
     const cores: Array<'alpha' | 'beta' | 'gamma' | 'delta'> = ['alpha', 'beta', 'gamma', 'delta'];
+    const specializations = [
+      'Vowel Leptons (A, E, I, O, U, Y)',
+      'Plosive Quarks (P, T, K, B, D, G)',
+      'Fricative Quarks (S, F, V, Z, C)',
+      'Nasal/Liquid Quarks (M, N, L, R)',
+      'Complex Quarks (W, H, J, X, Q)',
+      'Morphology / Suffixes (ING, ED, S)',
+      'Gauge Bosons / Punctuation (!, ?, .)',
+      'Executive Associative Attractor',
+    ];
 
     // 8 Spiking Neurons positioned in an ellipse around the interaction zone
     for (let i = 0; i < 8; i++) {
@@ -106,6 +138,7 @@ export class NeuromorphicPhysicsEngine {
         y: cy + Math.sin(angle) * ry,
         radius: 22,
         core,
+        specialization: specializations[i] || 'Associative Interneuron',
         membranePotential: -70.0,
         threshold: -50.0,
         restPotential: -70.0,
@@ -116,6 +149,7 @@ export class NeuromorphicPhysicsEngine {
         weights: {},
         lastSpikeVisual: 0,
         accumulatedCurrent: 0,
+        learnedTokens: [],
       };
 
       // Set initial synaptic memristor weights to adjacent neurons
@@ -238,7 +272,7 @@ export class NeuromorphicPhysicsEngine {
   public formHadron(particles: LetterParticle[], wordStr?: string): HadronWord {
     const word = wordStr || particles.map((p) => p.char).join('').toUpperCase();
     const hadronId = `h-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    const { isStable } = checkWordStability(word.split(''));
+    const { isStable } = checkWordStability(word.split(''), this.dynamicLexicon);
 
     particles.forEach((p, idx) => {
       p.hadronId = hadronId;
@@ -304,6 +338,12 @@ export class NeuromorphicPhysicsEngine {
    * Main Physics Tick Update (called at 60 FPS)
    */
   public update(dt: number) {
+    if (this.isPaused) {
+      this.updateFlashes(dt);
+      this.updateTelemetry();
+      return;
+    }
+
     const effectiveDt = dt * this.settings.timeStep;
     this.opsCounter += this.particles.length * 4;
 
@@ -490,7 +530,10 @@ export class NeuromorphicPhysicsEngine {
           const bigram = (pA.char + pB.char).toUpperCase();
           const reverseBigram = (pB.char + pA.char).toUpperCase();
           const hasAffinity =
-            STRONG_BINDING_BIGRAMS.has(bigram) || STRONG_BINDING_BIGRAMS.has(reverseBigram);
+            STRONG_BINDING_BIGRAMS.has(bigram) ||
+            STRONG_BINDING_BIGRAMS.has(reverseBigram) ||
+            this.dynamicBigrams.has(bigram) ||
+            this.dynamicBigrams.has(reverseBigram);
 
           // Strong Yukawa-like attractive potential if valid bigram within binding distance
           if (hasAffinity && dist < 70 && this.settings.collisionMode === 'fusion') {
@@ -877,6 +920,331 @@ export class NeuromorphicPhysicsEngine {
   }
 
   /**
+   * Maps a character to its specialized neuron soma index (0-7)
+   */
+  public mapCharToNeuronIndex(char: string): number {
+    const u = char.toUpperCase();
+    if ('AEIOUY'.includes(u)) return 0; // N1: Vowels
+    if ('PTKBDG'.includes(u)) return 1; // N2: Plosives
+    if ('SFVZC'.includes(u)) return 2;  // N3: Fricatives
+    if ('MNLR'.includes(u)) return 3;   // N4: Nasals/Liquids
+    if ('WHJXQ'.includes(u)) return 4;  // N5: Complex Quarks
+    if ('!?.#*-+:;~'.includes(char)) return 6; // N7: Gauge Bosons
+    if ('0123456789'.includes(char)) return 7; // N8: Digits / Attractors
+    return 5; // N6: Morphology / Suffixes
+  }
+
+  /**
+   * Trains the neuromorphic computer on a text stream (e.g. Project Gutenberg book).
+   * 1. Extracts vocabulary -> stored into dynamicLexicon.
+   * 2. Extracts bigram transitions -> increases strong force binding affinity.
+   * 3. Simulates STDP (Spike-Timing-Dependent Plasticity) on the 8 neuron memristor crossbars:
+   *    Each sequential letter transition fires pre-synaptic and post-synaptic neurons,
+   *    potentiating the memristor weight W_ij.
+   * 4. Populates associative recall graphs for word prediction.
+   */
+  public trainOnText(
+    rawText: string,
+    title: string = 'Custom Text',
+    epochs: number = 1,
+    learningRate: number = 0.08
+  ): BookTrainingStats {
+    this.trainingStats.isTraining = true;
+    this.trainingStats.bookTitle = title;
+
+    // Clean and tokenize text
+    const clean = rawText.replace(/\r\n/g, '\n');
+    const words = clean
+      .toUpperCase()
+      .split(/[^A-Z0-9'-]+/)
+      .filter((w) => w.length >= 2);
+
+    const bigramCountMap = new Map<string, number>();
+    const wordFreqMap = new Map<string, number>();
+
+    // Step 1: Ingest vocabulary and calculate frequencies
+    // Store passage sentences for contextual associative memory query
+    const sentences = clean
+      .split(/(?<=[.?!])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 8);
+    this.storedPassages.push({ bookTitle: title, text: rawText, sentences });
+
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      this.dynamicLexicon.add(w);
+      wordFreqMap.set(w, (wordFreqMap.get(w) || 0) + 1);
+
+      // Word-level transitions
+      if (i < words.length - 1) {
+        const nextWord = words[i + 1];
+        if (!this.wordTransitions.has(w)) {
+          this.wordTransitions.set(w, new Map());
+        }
+        const tMap = this.wordTransitions.get(w)!;
+        tMap.set(nextWord, (tMap.get(nextWord) || 0) + 1);
+      }
+
+      // Letter-level bigrams
+      for (let j = 0; j < w.length - 1; j++) {
+        const bg = w.substring(j, j + 2);
+        bigramCountMap.set(bg, (bigramCountMap.get(bg) || 0) + 1);
+      }
+    }
+
+    // Step 2: Register dynamic bigrams for linguistic particle physics binding
+    bigramCountMap.forEach((count, bg) => {
+      this.dynamicBigrams.set(bg, count);
+    });
+
+    // Step 3: Run STDP on the Memristor Synaptic Crossbars
+    for (let ep = 0; ep < epochs; ep++) {
+      bigramCountMap.forEach((count, bg) => {
+        const charA = bg[0];
+        const charB = bg[1];
+        const idxA = this.mapCharToNeuronIndex(charA);
+        const idxB = this.mapCharToNeuronIndex(charB);
+
+        if (idxA !== idxB && this.neurons[idxA] && this.neurons[idxB]) {
+          const neuronA = this.neurons[idxA];
+          const neuronB = this.neurons[idxB];
+
+          // STDP potentiation delta: proportional to frequency and learning rate
+          const deltaW = Math.min(0.2, (Math.log1p(count) / 10) * learningRate);
+          const currentW = neuronA.weights[neuronB.id] || 0.2;
+          neuronA.weights[neuronB.id] = Math.min(1.0, currentW + deltaW);
+
+          // Tag learned token
+          if (!neuronA.learnedTokens.includes(bg) && neuronA.learnedTokens.length < 12) {
+            neuronA.learnedTokens.push(bg);
+          }
+          if (!neuronB.learnedTokens.includes(bg) && neuronB.learnedTokens.length < 12) {
+            neuronB.learnedTokens.push(bg);
+          }
+
+          // Trigger visual excitation on the neurons
+          neuronA.lastSpikeVisual = 1.0;
+          neuronB.lastSpikeVisual = 0.8;
+          neuronA.membranePotential = Math.min(-50.0, neuronA.membranePotential + 4.0);
+          neuronB.membranePotential = Math.min(-50.0, neuronB.membranePotential + 3.0);
+        }
+      });
+    }
+
+    // Calculate potentiated synapses (W > 0.45)
+    let potentiatedCount = 0;
+    this.neurons.forEach((n) => {
+      Object.values(n.weights).forEach((w) => {
+        if (w > 0.45) potentiatedCount++;
+      });
+    });
+
+    // Sort top bigrams and words for telemetry
+    const sortedBigrams = Array.from(bigramCountMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([bg, count]) => ({
+        bigram: bg,
+        count,
+        weight: Math.round(((this.dynamicBigrams.get(bg) || 0) / (words.length || 1)) * 1000) / 10,
+      }));
+
+    const sortedWords = Array.from(wordFreqMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([word, freq]) => ({ word, frequency: freq }));
+
+    this.trainingStats = {
+      bookTitle: title,
+      totalWordsParsed: words.length,
+      uniqueVocabularyCount: this.dynamicLexicon.size,
+      patternsExtracted: bigramCountMap.size,
+      topBigrams: sortedBigrams,
+      topWords: sortedWords,
+      trainingEpoch: epochs,
+      stdpPotentiatedSynapses: potentiatedCount,
+      isTraining: false,
+    };
+
+    soundEngine.playWordFusion(sortedWords[0]?.word || 'TRAINED');
+
+    return this.trainingStats;
+  }
+
+  /**
+   * Associative Prediction / Next Token Recall:
+   * Uses the trained memristor crossbars and transition probabilities to predict
+   * what particle or word should follow a given seed word!
+   */
+  public predictNextTokens(seed: string): { nextChar: string; nextWords: string[] } {
+    // Strip punctuation so queries like "WHERE IS THE GOLDEN KEY?" work cleanly
+    const cleaned = seed.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').trim();
+    if (!cleaned) return { nextChar: 'E', nextWords: ['ATOM', 'ENERGY', 'LIGHT'] };
+
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    const lastWord = words[words.length - 1];
+    let nextWords: string[] = [];
+
+    // 1. Direct transition lookup from last word
+    const transitions = this.wordTransitions.get(lastWord);
+    if (transitions && transitions.size > 0) {
+      nextWords = Array.from(transitions.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([w]) => w);
+    }
+
+    // 2. Multi-word phrase search in stored passages
+    if (nextWords.length === 0 && this.storedPassages.length > 0) {
+      for (const p of this.storedPassages) {
+        for (const s of p.sentences) {
+          const uS = s.toUpperCase();
+          const idx = uS.indexOf(lastWord);
+          if (idx !== -1) {
+            const after = uS.slice(idx + lastWord.length).trim();
+            const followingTokens = after
+              .split(/[^A-Z0-9]+/)
+              .filter((w) => w.length >= 2)
+              .slice(0, 4);
+            if (followingTokens.length > 0) {
+              nextWords = followingTokens;
+              break;
+            }
+          }
+        }
+        if (nextWords.length > 0) break;
+      }
+    }
+
+    // 3. Fallback: words with prefix
+    if (nextWords.length === 0) {
+      nextWords = Array.from(this.dynamicLexicon)
+        .filter((w) => w.startsWith(lastWord.slice(-1)))
+        .slice(0, 4);
+      if (nextWords.length === 0) {
+        nextWords = Array.from(this.dynamicLexicon).slice(0, 4);
+      }
+    }
+
+    // 4. Next character prediction via memristor crossbar STDP weights
+    const lastChar = lastWord.slice(-1);
+    const neuronIdx = this.mapCharToNeuronIndex(lastChar);
+    const neuron = this.neurons[neuronIdx];
+
+    let highestWeightNeuronId = '';
+    let maxWeight = -1;
+
+    if (neuron) {
+      for (const [targetId, w] of Object.entries(neuron.weights)) {
+        if (w > maxWeight) {
+          maxWeight = w;
+          highestWeightNeuronId = targetId;
+        }
+      }
+    }
+
+    const targetNeuron = this.neurons.find((n) => n.id === highestWeightNeuronId);
+    let nextChar = 'E';
+    if (targetNeuron) {
+      if (targetNeuron.specialization.includes('Vowel')) nextChar = 'E';
+      else if (targetNeuron.specialization.includes('Plosive')) nextChar = 'T';
+      else if (targetNeuron.specialization.includes('Fricative')) nextChar = 'S';
+      else if (targetNeuron.specialization.includes('Nasal')) nextChar = 'N';
+      else if (targetNeuron.specialization.includes('Complex')) nextChar = 'R';
+      else nextChar = 'O';
+    }
+
+    return { nextChar, nextWords };
+  }
+
+  /**
+   * Resonant Associative Memory Query:
+   * Traverses stored book passages and STDP weight graphs to find
+   * exact contextual resonance for questions or multi-word prompts.
+   */
+  public queryBookMemory(query: string): MemoryRecallResult {
+    const clean = query.trim();
+    const queryTokens = clean
+      .toUpperCase()
+      .replace(/[^A-Z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 2);
+
+    // Stop words filter to prioritize keywords like "GOLDEN", "KEY"
+    const stopWords = new Set([
+      'WHERE', 'WHAT', 'WHO', 'WHEN', 'WHY', 'HOW', 'IS', 'ARE', 'THE',
+      'A', 'AN', 'IN', 'ON', 'OF', 'TO', 'AND', 'DID', 'DOES', 'WAS', 'WERE',
+    ]);
+    const keyTokens = queryTokens.filter((w) => !stopWords.has(w));
+    const searchTerms = keyTokens.length > 0 ? keyTokens : queryTokens;
+
+    let bestSentence = '';
+    let bestScore = 0;
+    let bestBook = '';
+
+    for (const passage of this.storedPassages) {
+      for (const sentence of passage.sentences) {
+        const uSentence = sentence.toUpperCase();
+        let score = 0;
+        for (const term of searchTerms) {
+          if (uSentence.includes(term)) {
+            score += 10;
+          }
+        }
+        // Exact multi-term contiguous matching bonus (e.g. "GOLDEN KEY")
+        if (searchTerms.length > 1 && uSentence.includes(searchTerms.join(' '))) {
+          score += 40;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestSentence = sentence;
+          bestBook = passage.bookTitle;
+        }
+      }
+    }
+
+    if (!bestSentence) {
+      // If book wasn't trained yet or term not found
+      bestSentence =
+        'No exact memory passage located in current synaptic weights. Please train a Project Gutenberg book (e.g. Alice in Wonderland) to burn patterns into the crossbar.';
+      bestBook = 'Neuromorphic Lattice';
+    }
+
+    // Extract answer words from the matched sentence
+    const wordsInSentence = bestSentence
+      .toUpperCase()
+      .replace(/[^A-Z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 2 && !stopWords.has(w));
+
+    // Predict token sequence to fire into collider
+    const predictedTokens = wordsInSentence.slice(0, 5);
+
+    // Identify active pathways and stimulate corresponding neurons
+    const activePathways: string[] = [];
+    searchTerms.slice(0, 3).forEach((term) => {
+      const idx = this.mapCharToNeuronIndex(term[0] || 'E');
+      const neuron = this.neurons[idx];
+      if (neuron) {
+        neuron.membranePotential = Math.min(-50.0, neuron.membranePotential + 18.0);
+        neuron.lastSpikeVisual = 1.0;
+        activePathways.push(neuron.label);
+      }
+    });
+
+    return {
+      query,
+      matchedSentence: bestSentence,
+      sourceBook: bestBook,
+      answerPhrase: bestSentence,
+      predictedTokens: predictedTokens.length > 0 ? predictedTokens : ['KEY', 'TABLE', 'GLASS'],
+      resonanceScore: bestScore,
+      activePathways,
+    };
+  }
+
+  /**
    * Reset the collider chamber
    */
   public clearChamber() {
@@ -886,5 +1254,116 @@ export class NeuromorphicPhysicsEngine {
     this.flashes = [];
     this.telemetry.recognizedWords = [];
     this.telemetry.annihilationsCount = 0;
+  }
+
+  /**
+   * Captures and exports the complete particle state (coordinates, velocities, momentum, bonds) as JSON
+   */
+  public exportState(): string {
+    const state = {
+      timestamp: new Date().toISOString(),
+      isPaused: this.isPaused,
+      settings: this.settings,
+      particles: this.particles.map((p) => ({
+        id: p.id,
+        char: p.char,
+        type: p.type,
+        x: Math.round(p.x * 100) / 100,
+        y: Math.round(p.y * 100) / 100,
+        vx: Math.round(p.vx * 100) / 100,
+        vy: Math.round(p.vy * 100) / 100,
+        mass: p.mass,
+        charge: p.charge,
+        spin: p.spin,
+        color: p.color,
+        radius: p.radius,
+        energy: Math.round(p.energy * 100) / 100,
+        momentumX: Math.round(p.mass * p.vx * 100) / 100,
+        momentumY: Math.round(p.mass * p.vy * 100) / 100,
+        isAntimatter: p.isAntimatter,
+        hadronId: p.hadronId,
+        bondOrder: p.bondOrder,
+      })),
+      bonds: this.bonds.map((b) => ({
+        id: b.id,
+        particleAId: b.particleAId,
+        particleBId: b.particleBId,
+        restLength: b.restLength,
+        stiffness: b.stiffness,
+        damping: b.damping,
+        strength: b.strength,
+      })),
+      hadrons: this.hadrons.map((h) => ({
+        id: h.id,
+        word: h.word,
+        particleIds: h.particleIds,
+        isStable: h.isStable,
+        resonanceEnergy: h.resonanceEnergy,
+        centerX: Math.round(h.centerX * 10) / 10,
+        centerY: Math.round(h.centerY * 10) / 10,
+      })),
+      attractors: this.attractors,
+    };
+    return JSON.stringify(state, null, 2);
+  }
+
+  /**
+   * Imports a saved particle physics state JSON configuration to resume
+   */
+  public importState(jsonString: string): boolean {
+    try {
+      const data = JSON.parse(jsonString);
+      if (!Array.isArray(data.particles)) return false;
+
+      this.clearChamber();
+
+      if (data.settings) {
+        this.settings = { ...this.settings, ...data.settings };
+      }
+
+      this.particles = data.particles.map((p: any) => ({
+        id: p.id || `p-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        char: p.char || 'A',
+        type: p.type || 'quark',
+        x: typeof p.x === 'number' ? p.x : this.width / 2,
+        y: typeof p.y === 'number' ? p.y : this.height / 2,
+        vx: typeof p.vx === 'number' ? p.vx : (p.momentumX ? p.momentumX / (p.mass || 2) : 0),
+        vy: typeof p.vy === 'number' ? p.vy : (p.momentumY ? p.momentumY / (p.mass || 2) : 0),
+        fx: 0,
+        fy: 0,
+        mass: p.mass || 2.0,
+        charge: p.charge ?? 1.0,
+        spin: p.spin ?? 0.5,
+        color: p.color || 'green',
+        radius: p.radius || 15,
+        energy: p.energy || 0.5 * (p.mass || 2) * ((p.vx || 0) ** 2 + (p.vy || 0) ** 2),
+        quantumPhase: 0,
+        isAntimatter: !!p.isAntimatter,
+        hadronId: p.hadronId || null,
+        bondOrder: p.bondOrder || 0,
+        trail: [],
+      }));
+
+      if (Array.isArray(data.bonds)) {
+        this.bonds = data.bonds;
+      }
+
+      if (Array.isArray(data.hadrons)) {
+        this.hadrons = data.hadrons.map((h: any) => ({
+          ...h,
+          createdAt: Date.now(),
+        }));
+      }
+
+      if (Array.isArray(data.attractors)) {
+        this.attractors = data.attractors;
+      }
+
+      this.isPaused = data.isPaused ?? true;
+      this.updateTelemetry();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

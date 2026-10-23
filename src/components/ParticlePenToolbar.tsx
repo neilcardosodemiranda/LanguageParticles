@@ -1,9 +1,5 @@
-/**
- * Interactive Particle Pen & Tool Selection Bar
- */
-
-import React from 'react';
-import { Target, Magnet, Activity, Search, Volume2, VolumeX } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Target, Magnet, Activity, Search, Volume2, VolumeX, Pause, Play, Download, Upload } from 'lucide-react';
 import { soundEngine } from '../utils/audio';
 
 interface ParticlePenToolbarProps {
@@ -15,6 +11,10 @@ interface ParticlePenToolbarProps {
   setIsAntimatter: (val: boolean) => void;
   soundEnabled: boolean;
   setSoundEnabled: (val: boolean) => void;
+  isPaused: boolean;
+  onTogglePause: () => void;
+  onExportState: () => void;
+  onImportState: (jsonString: string) => void;
 }
 
 export const ParticlePenToolbar: React.FC<ParticlePenToolbarProps> = ({
@@ -26,7 +26,12 @@ export const ParticlePenToolbar: React.FC<ParticlePenToolbarProps> = ({
   setIsAntimatter,
   soundEnabled,
   setSoundEnabled,
+  isPaused,
+  onTogglePause,
+  onExportState,
+  onImportState,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const commonLetters = ['A', 'E', 'I', 'O', 'U', 'N', 'T', 'R', 'S', 'Q', 'M', 'P', '!', '?'];
 
   const handleToggleSound = () => {
@@ -157,6 +162,57 @@ export const ParticlePenToolbar: React.FC<ParticlePenToolbarProps> = ({
         >
           {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
         </button>
+
+        {/* Pause / Resume Collider */}
+        <button
+          onClick={onTogglePause}
+          className={`px-2.5 py-1 rounded border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
+            isPaused
+              ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+              : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+          }`}
+          title={isPaused ? 'Resume simulation' : 'Pause simulation'}
+        >
+          {isPaused ? <Play className="w-3.5 h-3.5 fill-current" /> : <Pause className="w-3.5 h-3.5" />}
+          <span>{isPaused ? 'Resume' : 'Pause'}</span>
+        </button>
+
+        {/* Capture & Save Particle Coordinates / Momentum JSON */}
+        <button
+          onClick={onExportState}
+          className="px-2.5 py-1 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-sky-300 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+          title="Save particle coordinates and momentum as JSON"
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span>Save JSON</span>
+        </button>
+
+        {/* Load Particle Configuration JSON */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="px-2.5 py-1 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+          title="Load saved particle configuration JSON"
+        >
+          <Upload className="w-3.5 h-3.5" />
+          <span>Load JSON</span>
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const content = event.target?.result as string;
+              if (content) onImportState(content);
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+          }}
+          className="hidden"
+        />
       </div>
     </div>
   );

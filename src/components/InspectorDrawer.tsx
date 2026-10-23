@@ -127,6 +127,9 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
               <span className="font-bold text-emerald-400">{neuron.label}</span>
               <span className="text-[10px] uppercase text-slate-400">Core: {neuron.core}</span>
             </div>
+            <div className="mt-1 text-[11px] font-sans text-sky-300 font-medium">
+              {neuron.specialization}
+            </div>
             <div className="mt-2">
               <div className="flex justify-between text-[11px] mb-1">
                 <span className="text-slate-400">Membrane Potential:</span>
@@ -154,6 +157,25 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Learned Token Associations from Books */}
+          {neuron.learnedTokens && neuron.learnedTokens.length > 0 && (
+            <div className="bg-slate-900/60 p-2 rounded border border-slate-800 text-[11px]">
+              <div className="text-slate-400 font-sans font-semibold mb-1">
+                Learned Book Patterns ({neuron.learnedTokens.length}):
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {neuron.learnedTokens.slice(0, 8).map((tok, idx) => (
+                  <span
+                    key={idx}
+                    className="bg-sky-950 text-sky-300 border border-sky-800/60 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold"
+                  >
+                    {tok}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="bg-slate-900/50 p-2 rounded border border-slate-800 text-[11px] space-y-1">
             <div className="text-slate-400 font-sans font-semibold mb-1">Memristor Synaptic Conductances:</div>
