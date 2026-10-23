@@ -140,12 +140,25 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   // Canvas ref for Memristor Spiking Matrix visualization
   const matrixCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Poll engine telemetry at 10 Hz
+  // Poll engine telemetry at 10 Hz & flush dirty WASM mmap pages on tab hide/reload
   useEffect(() => {
     const timer = setInterval(() => {
       setTelemetry(wasmCrossbarEngine.getTelemetry());
     }, 100);
-    return () => clearInterval(timer);
+
+    const handleVisibilityOrUnload = () => {
+      if (document.visibilityState === 'hidden' && wasmCrossbarEngine.totalIngestedTokens > 0) {
+        void wasmCrossbarEngine.syncToBinaryMmap();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrUnload);
+    window.addEventListener('pagehide', handleVisibilityOrUnload);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityOrUnload);
+      window.removeEventListener('pagehide', handleVisibilityOrUnload);
+    };
   }, []);
 
   // Initial prime: FIRST restore from persistent SCB1 .bin mmap (Server + IndexedDB)
@@ -754,14 +767,14 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
 
           <div className="bg-slate-900/60 border border-slate-800/80 p-2 rounded">
             <div className="text-[10px] text-slate-400 font-mono flex items-center justify-between">
-              <span>VRAM FOOTPRINT</span>
+              <span>WASM LINEAR ARENA</span>
               <HardDrive className="w-3 h-3 text-emerald-400" />
             </div>
             <div className="text-base font-bold font-mono text-emerald-300 tabular-nums mt-0.5">
               {vramMb} <span className="text-xs font-normal">MB</span>
             </div>
             <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-              of 16,384 MB (16 GB)
+              {telemetry.wasmPagesAllocated.toLocaleString()} × 64 KiB WASM Pages
             </div>
           </div>
 
@@ -914,7 +927,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleExecuteSynthesis();
                   }}
-                  placeholder='Ask a question OR teach the crystal directly (e.g. "Your name is Synaptron." or "What is your name? My name is Synaptron.")...'
+                  placeholder="Excite crossbar with an interrogative wave (?) or inject any declarative trajectory (.) into WASM .bin memory..."
                   className="flex-1 min-w-[260px] bg-slate-900/90 border border-slate-700 rounded px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 font-mono"
                 />
                 <button
@@ -929,10 +942,10 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                   onClick={handleTeachCrystalDirectly}
                   disabled={isSynthesizing}
                   className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-sm shadow-emerald-900/40"
-                  title="Etch this statement or Q&A pair directly into Live Plastic Crystal Memory and sync to .bin mmap"
+                  title="Etch this wave directly into WebAssembly.Memory + Live Plastic Crystal Memory and flush to .bin mmap"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>TEACH CRYSTAL (.BIN)</span>
+                  <span>ETCH WAVE (.BIN)</span>
                 </button>
               </div>
 
@@ -954,8 +967,11 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                   </span>
                   <span className="text-slate-500">·</span>
                   <span className="text-slate-400">
-                    Tip: Type <span className="text-sky-300">&ldquo;Your name is Synaptron.&rdquo;</span> then ask{' '}
-                    <span className="text-amber-300">&ldquo;What is your name?&rdquo;</span>
+                    WASM Arena:{' '}
+                    <span className="text-sky-300">
+                      {telemetry.wasmPagesAllocated.toLocaleString()} pages (64 KiB)
+                    </span>{' '}
+                    · Temporal Stream: <span className="text-amber-300">M(t) = [S(t-1), S(t), S(t+1)]</span>
                   </span>
                 </div>
                 {plasticFeedbackBanner && (

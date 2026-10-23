@@ -20,6 +20,7 @@ import {
   CorpusCalibrationArtifact,
   TriChamberTelemetry,
 } from '../types/physics';
+import { WasmPersistentMemoryManager } from './wasmPersistentMemoryManager';
 
 export type MemoryCapacityPreset = '5M' | '25M' | '100M';
 
@@ -108,6 +109,7 @@ export interface CrossbarTelemetry {
   mmapPlasticWriteCount: number;
   mmapStatus: string;
   plasticQueryLearningEnabled: boolean;
+  wasmPagesAllocated: number;
 }
 
 export interface GenerationStepTelemetry {
@@ -271,14 +273,17 @@ export class WasmMemristorEngine {
   public lastResonantCurrentUa = 0;
   public useWebGPU = true;
 
-  // Real-time Plasticity & Binary .bin Memory-Mapped (mmap) State
+  // Real-time Plasticity & WebAssembly.Memory Binary .bin Memory-Mapped (mmap) Manager
+  public memoryManager = new WasmPersistentMemoryManager();
+  public wasmMemory: WebAssembly.Memory | null = null;
   public plasticQueryLearningEnabled = true;
   public mmapBinSizeBytes = 0;
   public mmapLastSyncMs = 0;
   public mmapPlasticWriteCount = 0;
-  public mmapStatus = 'MMAP READY';
+  public mmapStatus = 'WASM MMAP READY';
   public isMmapRestored = false;
   private mmapSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTemporalWave = '';
 
   constructor(preset: MemoryCapacityPreset = '25M') {
     this.preset = preset;
@@ -286,29 +291,28 @@ export class WasmMemristorEngine {
 
     const maxV = this.config.maxVocab;
     const maxS = this.config.maxSynapses;
-
-    this.rowPtr = new Uint32Array(maxV + 1);
-    this.rowCounts = new Uint32Array(maxV);
-    this.colHorizon = new Uint32Array(maxS);
-    this.conductance = new Float32Array(maxS);
-
     const auxEdgeCap = Math.min(maxS, 8_388_608);
-    this.headEdge = new Int32Array(maxV);
-    this.headEdge.fill(-1);
-    this.nextEdge = new Int32Array(auxEdgeCap);
-    this.nextEdge.fill(-1);
-    this.edgeSource = new Uint32Array(auxEdgeCap);
-    this.synapseLineage = new Uint32Array(auxEdgeCap);
 
-    this.tokenFreq = new Uint32Array(maxV);
-    this.tokenStartFreq = new Uint32Array(maxV);
-    this.tokenHfwd = new Float32Array(maxV);
-    this.tokenMu = new Float32Array(maxV);
-    this.tokenMu.fill(1.0);
-
-    this.somaVoltages = new Float32Array(maxV);
-    this.refractoryPsi = new Float32Array(maxV);
-    this.refractoryPsi.fill(1.0);
+    const arena = this.memoryManager.allocateContiguousWasmArena(
+      maxV,
+      maxS,
+      auxEdgeCap
+    );
+    this.wasmMemory = arena.wasmMemory;
+    this.rowPtr = arena.rowPtr;
+    this.rowCounts = arena.rowCounts;
+    this.colHorizon = arena.colHorizon;
+    this.conductance = arena.conductance;
+    this.headEdge = arena.headEdge;
+    this.nextEdge = arena.nextEdge;
+    this.edgeSource = arena.edgeSource;
+    this.synapseLineage = arena.synapseLineage;
+    this.tokenFreq = arena.tokenFreq;
+    this.tokenStartFreq = arena.tokenStartFreq;
+    this.tokenHfwd = arena.tokenHfwd;
+    this.tokenMu = arena.tokenMu;
+    this.somaVoltages = arena.somaVoltages;
+    this.refractoryPsi = arena.refractoryPsi;
 
     this.horizonDelayWavefront = new Uint32Array(this.NUM_HORIZONS);
     this.horizonDelayWavefront.fill(0);
@@ -366,6 +370,7 @@ export class WasmMemristorEngine {
 
   /**
    * Reallocates crossbar memory buffers to a new hardware capacity preset (5M, 25M, or 100M memristors)
+   * inside a single contiguous WebAssembly.Memory arena.
    */
   public switchPreset(newPreset: MemoryCapacityPreset): void {
     if (this.preset === newPreset) return;
@@ -374,29 +379,28 @@ export class WasmMemristorEngine {
       const cfg = MEMORY_PRESETS[newPreset];
       const maxV = cfg.maxVocab;
       const maxS = cfg.maxSynapses;
-
-      this.rowPtr = new Uint32Array(maxV + 1);
-      this.rowCounts = new Uint32Array(maxV);
-      this.colHorizon = new Uint32Array(maxS);
-      this.conductance = new Float32Array(maxS);
-
       const auxEdgeCap = Math.min(maxS, 8_388_608);
-      this.headEdge = new Int32Array(maxV);
-      this.headEdge.fill(-1);
-      this.nextEdge = new Int32Array(auxEdgeCap);
-      this.nextEdge.fill(-1);
-      this.edgeSource = new Uint32Array(auxEdgeCap);
-      this.synapseLineage = new Uint32Array(auxEdgeCap);
 
-      this.tokenFreq = new Uint32Array(maxV);
-      this.tokenStartFreq = new Uint32Array(maxV);
-      this.tokenHfwd = new Float32Array(maxV);
-      this.tokenMu = new Float32Array(maxV);
-      this.tokenMu.fill(1.0);
-
-      this.somaVoltages = new Float32Array(maxV);
-      this.refractoryPsi = new Float32Array(maxV);
-      this.refractoryPsi.fill(1.0);
+      const arena = this.memoryManager.allocateContiguousWasmArena(
+        maxV,
+        maxS,
+        auxEdgeCap
+      );
+      this.wasmMemory = arena.wasmMemory;
+      this.rowPtr = arena.rowPtr;
+      this.rowCounts = arena.rowCounts;
+      this.colHorizon = arena.colHorizon;
+      this.conductance = arena.conductance;
+      this.headEdge = arena.headEdge;
+      this.nextEdge = arena.nextEdge;
+      this.edgeSource = arena.edgeSource;
+      this.synapseLineage = arena.synapseLineage;
+      this.tokenFreq = arena.tokenFreq;
+      this.tokenStartFreq = arena.tokenStartFreq;
+      this.tokenHfwd = arena.tokenHfwd;
+      this.tokenMu = arena.tokenMu;
+      this.somaVoltages = arena.somaVoltages;
+      this.refractoryPsi = arena.refractoryPsi;
 
       this.horizonDelayWavefront = new Uint32Array(this.NUM_HORIZONS);
       this.horizonDelayWavefront.fill(0);
@@ -2456,6 +2460,11 @@ export class WasmMemristorEngine {
       plasticSummary = qLearned.summary;
     }
 
+    // Advance the live temporal wave buffer S(t-1) for pure temporal stream continuity
+    if (trimmedInput.length >= 3) {
+      this.lastTemporalWave = trimmedInput;
+    }
+
     // 5. Extract highest chemical-potential particle clusters (mu-ranked, Zero Stopwords)
     const rawTokens = primaryResponse
       .split(/\s+/)
@@ -2498,165 +2507,123 @@ export class WasmMemristorEngine {
   }
 
   /**
-   * Acoustic Speaker-Listener Dipole Reciprocity (\pi-phase deictic shift):
-   * When a human teaches the crystal in the second person ("Your name is Synaptron", "You are a crystal"),
-   * or introduces themselves in the first person ("My name is Buzz", "I am from Brazil"),
-   * this computes the reciprocal soma trajectory from the crystal's perspective so that
-   * subsequent questions ("What is your name?", "What is my name?", "Who are you?") resonate naturally.
-   */
-  private applySpeakerListenerDipoleReciprocity(statement: string): {
-    focalResponse: string;
-    stimulusContext: string;
-  } {
-    let clean = statement.trim();
-    if (!/[.!?]$/.test(clean)) {
-      clean += '.';
-    }
-
-    // Check if the user already provided a "Question? Answer." pair
-    const qIdx = clean.indexOf('?');
-    if (qIdx !== -1 && qIdx < clean.length - 2) {
-      const qPart = clean.slice(0, qIdx + 1).trim();
-      let aPart = clean.slice(qIdx + 1).trim();
-      if (!/[.!?]$/.test(aPart)) aPart += '.';
-      const invertedA = this.invertDeicticPronounDipole(aPart);
-      return {
-        focalResponse: invertedA,
-        stimulusContext: `${qPart} ${aPart}`,
-      };
-    }
-
-    const inverted = this.invertDeicticPronounDipole(clean);
-
-    // Derive physical interrogative stimulus context S(t-1) that couples to this statement
-    const lower = clean.toLowerCase();
-    const stimuli: string[] = [clean];
-    if (lower.includes('your name') || lower.includes('my name') || lower.includes('call you')) {
-      if (lower.includes('your name') || lower.includes('call you')) {
-        stimuli.unshift('What is your name? Who are you?');
-      } else {
-        stimuli.unshift('What is my name? Who am I?');
-      }
-    } else if (lower.includes('you are') || lower.includes('i am') || lower.includes("i'm")) {
-      if (lower.includes('you are')) {
-        stimuli.unshift('Who are you? What are you?');
-      } else {
-        stimuli.unshift('Who am I? Where do I come from?');
-      }
-    }
-
-    return {
-      focalResponse: inverted,
-      stimulusContext: stimuli.join(' '),
-    };
-  }
-
-  private invertDeicticPronounDipole(text: string): string {
-    // Perform token-boundary speaker-listener phase inversion:
-    // "Your name is X" -> "My name is X"
-    // "You are X" -> "I am X"
-    let s = text;
-    if (/^\s*your\s+name\s+is\b/i.test(s)) {
-      s = s.replace(/^\s*your\s+name\s+is\b/i, 'My name is');
-    } else if (/^\s*you\s+are\b/i.test(s)) {
-      s = s.replace(/^\s*you\s+are\b/i, 'I am');
-    } else if (/^\s*you\s+come\s+from\b/i.test(s)) {
-      s = s.replace(/^\s*you\s+come\s+from\b/i, 'I come from');
-    } else if (/^\s*my\s+name\s+is\b/i.test(s)) {
-      // Distinguish "My name is X" when preceded by "What is your name?" vs user introducing themselves
-      // Keep "My name is X" intact so self-introductions or crystal-voice definitions work directly!
-    }
-    return s;
-  }
-
-  /**
-   * Etches a user statement or Q&A pair directly into the Live Plastic Crystal Memory M(t),
-   * trains the 25M CSR + 8-View + Pauli H8 synapses in real time, and flushes to .bin mmap!
+   * 100% Pure-Physics Real-Time Plastic Wave Ingestion (Zero Hardcoded Prompts or Pronoun Rules):
+   * Segments incoming waves purely by punctuation bosons (. ! ?) into Tri-Chamber Narrative
+   * Molecules M(t) = [S(t-1), S(t), S(t+1)], coupling consecutive sentences in the temporal stream
+   * and potentiating the WebAssembly.Memory CSR + 8-View + Pauli H8 synapses in real time.
    */
   public learnFromRealtimeInput(
     rawInput: string,
     autoSyncMmap: boolean = true
   ): { moleculesEtched: number; synapsesPotentiated: number; summary: string } {
-    const clean = rawInput.trim();
+    const clean = rawInput.replace(/\s+/g, ' ').trim();
     if (clean.length < 3) {
       return { moleculesEtched: 0, synapsesPotentiated: 0, summary: '' };
     }
 
     const startTime = performance.now();
     const startSyn = this.activeSynapses + this.charDelayEdgeCount;
-    const { focalResponse, stimulusContext } = this.applySpeakerListenerDipoleReciprocity(clean);
-
     const docTitle = 'Live Plastic Crystal Memory';
-    const toks = this.tokenize(focalResponse);
-    const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
-    const clauses = focalResponse
-      .split(/[;:]/)
-      .map((c) => c.trim())
-      .filter((c) => c.length > 4);
 
-    // Also register all tokens from the raw input & stimulusContext so every word is in the vocabulary
-    const rawToks = this.tokenize(stimulusContext);
-    for (const rt of rawToks) {
-      this.getOrRegisterToken(rt);
+    // Segment wave purely by punctuation bosons (. ! ?)
+    const segments = clean
+      .split(/(?<=[.?!]["'”’]?)\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2);
+
+    const waveSentences =
+      segments.length > 0
+        ? segments.map((s) => (/[.!?]$/.test(s) ? s : `${s}.`))
+        : [/[.!?]$/.test(clean) ? clean : `${clean}.`];
+
+    let etchedCount = 0;
+    let lastFocalEtched = '';
+
+    for (let i = 0; i < waveSentences.length; i++) {
+      const focal = waveSentences[i];
+      const prev = i > 0 ? waveSentences[i - 1] : this.lastTemporalWave;
+      const next = i < waveSentences.length - 1 ? waveSentences[i + 1] : '';
+
+      const allToks = this.tokenize(`${prev} ${focal} ${next}`);
+      for (const rt of allToks) {
+        this.getOrRegisterToken(rt);
+      }
+
+      // If this segment in a multi-sentence wave is a pure question ('?') followed by an answer segment,
+      // let it serve as the S(t-1) stimulus chamber for the next segment rather than a standalone focal answer
+      if (focal.endsWith('?') && i < waveSentences.length - 1) {
+        continue;
+      }
+
+      const toks = this.tokenize(focal);
+      const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
+      const clauses = focal
+        .split(/[;:]/)
+        .map((c) => c.trim())
+        .filter((c) => c.length > 4);
+
+      const lineageId = this.molecules.length + 1;
+      const mol: CrossbarNarrativeMolecule = {
+        id: `${docTitle}::M${Date.now()}_${i}_${Math.floor(Math.random() * 1000)}`,
+        lineageId,
+        docTitle,
+        sentenceIndex: this.molecules.filter((m) => m.docTitle === docTitle).length,
+        prevText: prev,
+        focalText: focal,
+        nextText: next,
+        clauses: clauses.length > 0 ? clauses : [focal],
+        tokenIds,
+        lowerWords: Array.from(
+          new Set(
+            allToks
+              .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+              .filter((w) => w.length >= 2)
+          )
+        ),
+      };
+
+      this.molecules = [
+        mol,
+        ...this.molecules.filter(
+          (m) =>
+            !(
+              m.docTitle === docTitle &&
+              m.focalText.toLowerCase() === focal.toLowerCase()
+            )
+        ),
+      ];
+
+      const trainedToks = this.trainSingleMolecule(mol, 4, 0.25, true, 16);
+      this.totalIngestedTokens += trainedToks * 4;
+      etchedCount++;
+      lastFocalEtched = focal;
     }
 
-    const lineageId = this.molecules.length + 1;
-    const mol: CrossbarNarrativeMolecule = {
-      id: `${docTitle}::M${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      lineageId,
-      docTitle,
-      sentenceIndex: this.molecules.filter((m) => m.docTitle === docTitle).length,
-      prevText: stimulusContext,
-      focalText: focalResponse,
-      nextText: clean,
-      clauses: clauses.length > 0 ? clauses : [focalResponse],
-      tokenIds,
-      lowerWords: Array.from(
-        new Set(
-          [...toks, ...rawToks]
-            .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
-            .filter((w) => w.length >= 2)
-        )
-      ),
-    };
-
-    // Deduplicate identical focalText in Live Plastic Crystal Memory and place at front
-    this.molecules = [
-      mol,
-      ...this.molecules.filter(
-        (m) =>
-          !(
-            m.docTitle === docTitle &&
-            m.focalText.toLowerCase() === focalResponse.toLowerCase()
-          )
-      ),
-    ];
-
-    // Train the new Narrative Molecule with strong STDP & full k=2..16 Pauli H8 delay lines
-    const trainedToks = this.trainSingleMolecule(mol, 4, 0.25, true, 16);
-    this.totalIngestedTokens += trainedToks * 4;
+    this.lastTemporalWave = waveSentences[waveSentences.length - 1];
     this.rebuildContiguousCSR();
     this.recalibrateThermodynamics(startTime);
 
     const endSyn = this.activeSynapses + this.charDelayEdgeCount;
     const deltaSyn = Math.max(1, endSyn - startSyn);
     this.mmapPlasticWriteCount++;
+    this.memoryManager.dirtyWritesCount = this.mmapPlasticWriteCount;
 
     if (autoSyncMmap) {
       this.scheduleBinaryMmapSync();
     }
 
     return {
-      moleculesEtched: 1,
+      moleculesEtched: etchedCount,
       synapsesPotentiated: deltaSyn,
-      summary: `Etched "${focalResponse}" into Live Plastic Crystal (+${deltaSyn} synapses) & synced to .bin mmap`,
+      summary: `WASM Mmap Etched "${lastFocalEtched || clean}" (+${deltaSyn} synapses) -> synaptron_crystal.bin`,
     };
   }
 
   /**
    * Online Hebbian-STDP Query & Response Potentiation:
-   * Even when the user asks a pure question ('?'), the crystal learns new vocabulary words
-   * from the query, updates character & CSR conductances, and reinforces the winning response molecule.
+   * When an interrogative wave ('?') excites the crossbar, the crystal registers any new
+   * tokens into WASM linear memory, potentiates the queried synaptic pathways, and reinforces
+   * the winning trajectory M*(t) with temporal link S(t-1) = queryText.
    */
   public potentiateQueryAndResponsePair(
     queryText: string,
@@ -2694,34 +2661,19 @@ export class WasmMemristorEngine {
 
     this.rebuildContiguousCSR();
     this.mmapPlasticWriteCount++;
+    this.memoryManager.dirtyWritesCount = this.mmapPlasticWriteCount;
     this.scheduleBinaryMmapSync();
 
     const deltaSyn = Math.max(1, this.activeSynapses + this.charDelayEdgeCount - startSyn);
     return {
       synapsesPotentiated: deltaSyn,
-      summary: `Online STDP Query Potentiation (+${deltaSyn} conductances) synced to .bin mmap`,
+      summary: `Online STDP Query Potentiation (+${deltaSyn} conductances) -> synaptron_crystal.bin`,
     };
   }
 
   /**
-   * Exports the entire Crossbar Lattice, Vocabulary, CSR TypedArrays, Narrative Molecules,
+   * Exports the active WebAssembly.Memory CSR regions, Vocabulary, Narrative Molecules,
    * and Thermodynamic Tables into a compact, zero-copy SCB1 Binary .bin Memory-Mapped Image.
-   *
-   * SCB1 Header Layout (64 bytes = 16 x 32-bit words):
-   * [0] magic = 0x53434231 ("SCB1")
-   * [1] version = 1
-   * [2] presetCode (0='5M', 1='25M', 2='100M')
-   * [3] vocabCount
-   * [4] activeSynapses
-   * [5] totalIngestedTokens
-   * [6] ingestedBooksCount
-   * [7] totalRawCharsTrained
-   * [8] totalWordStreamIndex
-   * [9] calibratedCStar (Float32 bits)
-   * [10] calibratedThTrans (Float32 bits)
-   * [11] jsonByteLength
-   * [12] mmapPlasticWriteCount
-   * [13..15] reserved
    */
   public exportBinaryMmap(): ArrayBuffer {
     this.rebuildContiguousCSR();
@@ -2729,7 +2681,6 @@ export class WasmMemristorEngine {
     const vocabCount = this.vocabList.length;
     const synCount = this.activeSynapses;
 
-    // Compact serializable representation of auxiliary maps & molecules
     const compactMolecules = this.molecules.map((m) => [
       m.id,
       m.lineageId,
@@ -2756,7 +2707,6 @@ export class WasmMemristorEngine {
       ]);
     });
 
-    // Keep top 100,000 word counts for instant thermodynamic lookup
     const wordCountEntries = Array.from(this.wordCounts.entries()).slice(0, 100_000);
     const wordStartEntries = Array.from(this.wordSentenceStartCounts.entries()).slice(0, 50_000);
 
@@ -2769,17 +2719,17 @@ export class WasmMemristorEngine {
       cf: charFwdEntries,
       cb: charBwdEntries,
       cal: this.calibrationArtifact,
+      lw: this.lastTemporalWave,
     };
 
     const encoder = new TextEncoder();
     const jsonBytes = encoder.encode(JSON.stringify(metaPayload));
     const jsonByteLen = jsonBytes.byteLength;
 
-    // Calculate aligned TypedArray byte lengths (all 4-byte aligned)
     const headerBytes = 64;
     const rowPtrBytes = (vocabCount + 1) * 4;
-    const vocabArrBytes = vocabCount * 4; // rowCounts, tokenFreq, tokenStartFreq, tokenHfwd, tokenMu (5 arrays)
-    const synArrBytes = synCount * 4; // colHorizon, conductance, edgeSource, synapseLineage (4 arrays)
+    const vocabArrBytes = vocabCount * 4;
+    const synArrBytes = synCount * 4;
 
     const binaryTypedBytes =
       headerBytes + rowPtrBytes + vocabArrBytes * 5 + synArrBytes * 4;
@@ -2805,67 +2755,56 @@ export class WasmMemristorEngine {
 
     let offset = headerBytes;
 
-    // 1. rowPtr (vocabCount + 1)
     new Uint32Array(buffer, offset, vocabCount + 1).set(
       this.rowPtr.subarray(0, vocabCount + 1)
     );
     offset += rowPtrBytes;
 
-    // 2. rowCounts (vocabCount)
     new Uint32Array(buffer, offset, vocabCount).set(
       this.rowCounts.subarray(0, vocabCount)
     );
     offset += vocabArrBytes;
 
-    // 3. tokenFreq (vocabCount)
     new Uint32Array(buffer, offset, vocabCount).set(
       this.tokenFreq.subarray(0, vocabCount)
     );
     offset += vocabArrBytes;
 
-    // 4. tokenStartFreq (vocabCount)
     new Uint32Array(buffer, offset, vocabCount).set(
       this.tokenStartFreq.subarray(0, vocabCount)
     );
     offset += vocabArrBytes;
 
-    // 5. tokenHfwd (vocabCount)
     new Float32Array(buffer, offset, vocabCount).set(
       this.tokenHfwd.subarray(0, vocabCount)
     );
     offset += vocabArrBytes;
 
-    // 6. tokenMu (vocabCount)
     new Float32Array(buffer, offset, vocabCount).set(
       this.tokenMu.subarray(0, vocabCount)
     );
     offset += vocabArrBytes;
 
-    // 7. colHorizon (synCount)
     new Uint32Array(buffer, offset, synCount).set(
       this.colHorizon.subarray(0, synCount)
     );
     offset += synArrBytes;
 
-    // 8. conductance (synCount)
     new Float32Array(buffer, offset, synCount).set(
       this.conductance.subarray(0, synCount)
     );
     offset += synArrBytes;
 
-    // 9. edgeSource (synCount)
     new Uint32Array(buffer, offset, synCount).set(
       this.edgeSource.subarray(0, synCount)
     );
     offset += synArrBytes;
 
-    // 10. synapseLineage (synCount)
     new Uint32Array(buffer, offset, synCount).set(
       this.synapseLineage.subarray(0, synCount)
     );
     offset += synArrBytes;
 
-    // 11. Auxiliary UTF-8 table
     new Uint8Array(buffer, offset, jsonByteLen).set(jsonBytes);
 
     this.mmapBinSizeBytes = totalBytes;
@@ -2873,7 +2812,7 @@ export class WasmMemristorEngine {
   }
 
   /**
-   * Maps a raw SCB1 Binary .bin ArrayBuffer directly into the Crossbar's TypedArrays
+   * Maps a raw SCB1 Binary .bin ArrayBuffer directly into the WebAssembly.Memory arena
    * and reconstructs the Forward-Star linked index & narrative molecules in milliseconds.
    */
   public importBinaryMmap(buffer: ArrayBuffer): boolean {
@@ -2947,7 +2886,6 @@ export class WasmMemristorEngine {
 
     this.activeSynapses = synCount;
 
-    // Re-link Forward-Star headEdge & nextEdge in O(synCount) so online STDP can continue seamlessly
     const maxAux = Math.min(synCount, this.nextEdge.length);
     for (let e = maxAux - 1; e >= 0; e--) {
       const src = this.edgeSource[e];
@@ -2957,7 +2895,6 @@ export class WasmMemristorEngine {
       }
     }
 
-    // Decode UTF-8 metadata block
     const jsonSlice = new Uint8Array(buffer, offset, jsonByteLen);
     const decoder = new TextDecoder();
     const meta = JSON.parse(decoder.decode(jsonSlice)) as {
@@ -2969,9 +2906,11 @@ export class WasmMemristorEngine {
       cf: Array<[string, Array<[string, number]>]>;
       cb: Array<[string, Array<[string, number]>]>;
       cal?: CorpusCalibrationArtifact;
+      lw?: string;
     };
 
     this.vocabList = meta.v || [];
+    this.lastTemporalWave = meta.lw || '';
     this.tokenToIdMap.clear();
     this.lowerTokenToIdMap.clear();
     for (let i = 0; i < this.vocabList.length; i++) {
@@ -3003,7 +2942,6 @@ export class WasmMemristorEngine {
       this.charBackwardCrossbar.set(cB, new Map(entries));
     }
 
-    // Reconstruct Narrative Molecules & fast word transitions
     this.molecules = [];
     this.wordTransitions.clear();
     this.wordBackwardTransitions.clear();
@@ -3038,7 +2976,6 @@ export class WasmMemristorEngine {
       };
       this.molecules.push(mol);
 
-      // Re-crystallize H8 delay lines immediately for Live Plastic Crystal Memory molecules
       if (docTitle === 'Live Plastic Crystal Memory') {
         this.crystallizeMoleculeH8DelayLines(mol, 3, 0.22, 16);
       }
@@ -3047,35 +2984,13 @@ export class WasmMemristorEngine {
     this.recalibrateThermodynamics(startTime);
     this.mmapBinSizeBytes = buffer.byteLength;
     this.mmapLastSyncMs = Math.round((performance.now() - startTime) * 10) / 10;
-    this.mmapStatus = `MMAP ACTIVE (${(buffer.byteLength / (1024 * 1024)).toFixed(2)} MB .bin)`;
+    this.mmapStatus = `WASM MMAP ACTIVE (${(buffer.byteLength / (1024 * 1024)).toFixed(2)} MB .bin · ${this.memoryManager.wasmPagesAllocated} pages)`;
     this.isMmapRestored = true;
     return true;
   }
 
   /**
-   * Opens the browser's IndexedDB binary store for zero-copy ArrayBuffer persistence
-   */
-  private openMmapIndexedDB(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      if (typeof indexedDB === 'undefined') {
-        return reject(new Error('IndexedDB unavailable'));
-      }
-      const req = indexedDB.open('synaptron_crystal_mmap_db', 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains('mmap_bins')) {
-          db.createObjectStore('mmap_bins');
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  /**
-   * Debounced background flush of the SCB1 binary .bin image to both:
-   * 1. Browser IndexedDB raw ArrayBuffer ('synaptron_crystal.bin')
-   * 2. Server POSIX file ('data/synaptron_crystal.bin' via POST /api/crystal/mmap.bin)
+   * Debounced background flush of the SCB1 binary .bin image via WasmPersistentMemoryManager
    */
   public scheduleBinaryMmapSync(delayMs: number = 120): void {
     if (this.mmapSyncTimer) {
@@ -3088,111 +3003,32 @@ export class WasmMemristorEngine {
 
   public async syncToBinaryMmap(): Promise<boolean> {
     try {
-      const t0 = performance.now();
       const binBuffer = this.exportBinaryMmap();
-
-      // 1. Save to IndexedDB binary page store
-      try {
-        const db = await this.openMmapIndexedDB();
-        await new Promise<void>((resolve, reject) => {
-          const tx = db.transaction('mmap_bins', 'readwrite');
-          tx.objectStore('mmap_bins').put(binBuffer, 'synaptron_crystal.bin');
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => reject(tx.error);
-        });
-      } catch {
-        // Ignore IndexedDB quota/private mode errors when server .bin is active
-      }
-
-      // 2. Stream raw binary ArrayBuffer to server /api/crystal/mmap.bin
-      const res = await fetch('/api/crystal/mmap.bin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: binBuffer,
-      });
-
-      const elapsed = Math.round((performance.now() - t0) * 10) / 10;
-      this.mmapLastSyncMs = elapsed;
-      const mb = (binBuffer.byteLength / (1024 * 1024)).toFixed(2);
-      if (res.ok) {
-        this.mmapStatus = `MMAP SYNCED · ${mb} MB .bin (${elapsed} ms)`;
-      } else {
-        this.mmapStatus = `MMAP LOCAL · ${mb} MB .bin (${elapsed} ms)`;
-      }
-      return true;
+      const res = await this.memoryManager.flushBinaryImageToStorage(binBuffer);
+      this.mmapLastSyncMs = res.elapsedMs;
+      this.mmapStatus = res.statusText;
+      return res.ok;
     } catch {
       return false;
     }
   }
 
   /**
-   * Restores the crystal from the persistent SCB1 .bin binary image (checks server
-   * data/synaptron_crystal.bin and browser IndexedDB, picking whichever has the richest vocabulary).
+   * Restores the crystal from the persistent SCB1 .bin binary image via WasmPersistentMemoryManager
    */
   public async restoreFromBinaryMmap(): Promise<boolean> {
     if (this.isMmapRestored && this.vocabList.length > 600) {
       return true;
     }
 
-    let idbBuffer: ArrayBuffer | null = null;
-    let idbVocab = 0;
-
-    try {
-      const db = await this.openMmapIndexedDB();
-      idbBuffer = await new Promise<ArrayBuffer | null>((resolve) => {
-        const tx = db.transaction('mmap_bins', 'readonly');
-        const req = tx.objectStore('mmap_bins').get('synaptron_crystal.bin');
-        req.onsuccess = () => resolve((req.result as ArrayBuffer) || null);
-        req.onerror = () => resolve(null);
-      });
-      if (idbBuffer && idbBuffer.byteLength >= 64) {
-        const h = new Uint32Array(idbBuffer, 0, 8);
-        if (h[0] === 0x53434231) idbVocab = h[3];
-      }
-    } catch {
-      // Ignore IDB error
-    }
-
-    let srvBuffer: ArrayBuffer | null = null;
-    let srvVocab = 0;
-
-    try {
-      const statusRes = await fetch('/api/crystal/status');
-      if (statusRes.ok) {
-        const status = await statusRes.json();
-        if (status.exists && status.byteLength >= 64) {
-          const binRes = await fetch('/api/crystal/mmap.bin');
-          if (binRes.ok) {
-            srvBuffer = await binRes.arrayBuffer();
-            if (srvBuffer && srvBuffer.byteLength >= 64) {
-              const h = new Uint32Array(srvBuffer, 0, 8);
-              if (h[0] === 0x53434231) srvVocab = h[3];
-            }
-          }
-        }
-      }
-    } catch {
-      // Ignore server fetch error
-    }
-
-    const winningBuffer =
-      srvVocab >= idbVocab && srvBuffer ? srvBuffer : idbBuffer || srvBuffer;
-
+    const winningBuffer = await this.memoryManager.loadRichestBinaryImageFromStorage();
     if (winningBuffer && winningBuffer.byteLength >= 64) {
       const ok = this.importBinaryMmap(winningBuffer);
       if (ok) {
-        // Ensure both tiers have the winning binary image
-        if (srvVocab < idbVocab && idbBuffer) {
-          void fetch('/api/crystal/mmap.bin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: idbBuffer,
-          });
-        }
+        this.mmapStatus = this.memoryManager.storageTierStatus;
         return true;
       }
     }
-
     return false;
   }
 
@@ -3246,6 +3082,7 @@ export class WasmMemristorEngine {
       mmapPlasticWriteCount: this.mmapPlasticWriteCount,
       mmapStatus: this.mmapStatus,
       plasticQueryLearningEnabled: this.plasticQueryLearningEnabled,
+      wasmPagesAllocated: this.memoryManager.wasmPagesAllocated,
     };
   }
 
@@ -3258,7 +3095,8 @@ export class WasmMemristorEngine {
     this.ingestedBooksCount = 0;
     this.mmapPlasticWriteCount = 0;
     this.mmapBinSizeBytes = 0;
-    this.mmapStatus = 'MMAP RESET';
+    this.lastTemporalWave = '';
+    this.mmapStatus = 'WASM MMAP RESET';
     this.rowPtr.fill(0);
     this.rowCounts.fill(0);
     this.colHorizon.fill(0);
@@ -3276,17 +3114,12 @@ export class WasmMemristorEngine {
     this.horizonDelayWavefront.fill(0);
 
     this.seedFundamentalTokens();
-    void fetch('/api/crystal/mmap.bin', { method: 'DELETE' });
-    this.openMmapIndexedDB()
-      .then((db) => {
-        const tx = db.transaction('mmap_bins', 'readwrite');
-        tx.objectStore('mmap_bins').delete('synaptron_crystal.bin');
-      })
-      .catch(() => {});
+    void this.memoryManager.purgeAllBinaryStorage();
   }
 }
 
 // Global singleton instance with Apple M4 25M default
 export const wasmCrossbarEngine = new WasmMemristorEngine('25M');
+
 
 
