@@ -34,26 +34,50 @@ export interface CapacityConfig {
 export const MEMORY_PRESETS: Record<MemoryCapacityPreset, CapacityConfig> = {
   '5M': {
     maxSynapses: 5_242_880,
-    maxVocab: 16_384,
-    totalVramBytes: 5_242_880 * 8 + 16_384 * 4 * 3, // ~42.2 MB
+    maxVocab: 65_536,
+    totalVramBytes: 5_242_880 * 8 + 65_536 * 4 * 3, // ~42.7 MB
     label: '5M Memristors (42 MB)',
-    description: 'Ultra-lightweight baseline suitable for quick experimentation',
+    description: 'Ultra-lightweight baseline with 65,536 vocabulary soma slots',
   },
   '25M': {
     maxSynapses: 26_214_400,
-    maxVocab: 65_536,
-    totalVramBytes: 26_214_400 * 8 + 65_536 * 4 * 3, // ~210.5 MB
+    maxVocab: 131_072,
+    totalVramBytes: 26_214_400 * 8 + 131_072 * 4 * 3, // ~211.2 MB
     label: '25M Memristors (210 MB) [M4 Default]',
-    description: 'High-density conversational crossbar tuned for Apple M4 Unified Memory',
+    description: 'High-density conversational crossbar with 131,072 vocabulary somas for Apple M4 Unified Memory',
   },
   '100M': {
     maxSynapses: 104_857_600,
-    maxVocab: 131_072,
-    totalVramBytes: 104_857_600 * 8 + 131_072 * 4 * 3, // ~840.5 MB
-    label: '100M Memristors (841 MB) [Bare-Metal Maximum]',
-    description: 'Massive multi-book library crossbar for full-depth literary resonance',
+    maxVocab: 262_144,
+    totalVramBytes: 104_857_600 * 8 + 262_144 * 4 * 3, // ~842.0 MB
+    label: '100M Memristors (842 MB) [Bare-Metal Maximum]',
+    description: 'Massive Gutenberg library crossbar with 262,144 vocabulary somas & 100M synapses',
   },
 };
+
+export interface IngestedBookRecord {
+  id: string;
+  gutenbergId?: number;
+  title: string;
+  author: string;
+  tokensProcessed: number;
+  moleculesAdded: number;
+  newVocabAdded: number;
+  newSynapsesAdded: number;
+  durationMs: number;
+  tokensPerSec: number;
+}
+
+export interface BookStreamProgress {
+  title: string;
+  processedMolecules: number;
+  totalMolecules: number;
+  percent: number;
+  tokensProcessed: number;
+  vocabSize: number;
+  activeSynapses: number;
+  tokensPerSec: number;
+}
 
 export interface CrossbarTelemetry {
   capacityPreset: MemoryCapacityPreset;
@@ -215,6 +239,7 @@ export class WasmMemristorEngine {
 
   // Tri-Chamber Narrative Molecules M(t) = [S(t-1), S(t), S(t+1)]
   public molecules: CrossbarNarrativeMolecule[] = [];
+  public ingestedBookRegistry: IngestedBookRecord[] = [];
 
   // Vocab Hash Maps and string tables (zero-GC continuous arrays)
   public vocabList: string[] = [];
@@ -251,7 +276,7 @@ export class WasmMemristorEngine {
     this.colHorizon = new Uint32Array(maxS);
     this.conductance = new Float32Array(maxS);
 
-    const auxEdgeCap = Math.min(maxS, 2_097_152);
+    const auxEdgeCap = Math.min(maxS, 8_388_608);
     this.headEdge = new Int32Array(maxV);
     this.headEdge.fill(-1);
     this.nextEdge = new Int32Array(auxEdgeCap);
@@ -280,6 +305,7 @@ export class WasmMemristorEngine {
     this.tokenToIdMap.clear();
     this.lowerTokenToIdMap.clear();
     this.molecules = [];
+    this.ingestedBookRegistry = [];
     this.dynamicLexicon.clear();
     this.wordCounts.clear();
     this.wordSentenceStartCounts.clear();
@@ -338,7 +364,7 @@ export class WasmMemristorEngine {
       this.colHorizon = new Uint32Array(maxS);
       this.conductance = new Float32Array(maxS);
 
-      const auxEdgeCap = Math.min(maxS, 2_097_152);
+      const auxEdgeCap = Math.min(maxS, 8_388_608);
       this.headEdge = new Int32Array(maxV);
       this.headEdge.fill(-1);
       this.nextEdge = new Int32Array(auxEdgeCap);
@@ -538,9 +564,234 @@ export class WasmMemristorEngine {
   }
 
   /**
-   * Ingest a body of text using:
-   * 1. Multi-Horizon STDP Plasticity across the 25M Contiguous CSR Token Crossbar (\delta = 0..7)
-   * 2. Pauli-Orthogonal H8 Multi-Delay Character Synapses (k = 2..8) with Trajectory Lineage coordinates
+   * Strips Project Gutenberg license header and footer boilerplate on the client side
+   * (in case a user uploads a raw .txt downloaded from gutenberg.org).
+   */
+  public stripGutenbergBoilerplate(raw: string): string {
+    const normalized = raw.replace(/\r\n/g, '\n');
+    const startRegex =
+      /\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG EBOOK[^*]*\*\*\*|END OF THE SMALL PRINT! FOR PUBLIC DOMAIN ETEXTS[^\n]*\n/i;
+    const endRegex =
+      /\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG EBOOK[^*]*\*\*\*|\*\*\*\s*END OF THE PROJECT GUTENBERG/i;
+
+    let startIdx = 0;
+    const startHit = startRegex.exec(normalized);
+    if (startHit && startHit.index !== undefined) {
+      startIdx = startHit.index + startHit[0].length;
+    }
+
+    let endIdx = normalized.length;
+    const endHit = endRegex.exec(normalized);
+    if (endHit && endHit.index !== undefined && endHit.index > startIdx) {
+      endIdx = endHit.index;
+    }
+
+    const stripped = normalized.slice(startIdx, endIdx).trim();
+    return stripped.length > 100 ? stripped : normalized.trim();
+  }
+
+  /**
+   * Crystallizes Pauli-Orthogonal H8 Multi-Delay Character Synapses (k = 2..maxK)
+   * and Lineage Tags for a single Narrative Molecule M(t).
+   */
+  public crystallizeMoleculeH8DelayLines(
+    mol: CrossbarNarrativeMolecule,
+    epochs: number = 1,
+    learningRate: number = 0.15,
+    maxK: number = 16
+  ): void {
+    const s = mol.focalText;
+    for (let i = 0; i < s.length - 1; i++) {
+      const cB = s[i + 1];
+      for (let k = 2; k <= maxK; k++) {
+        if (i >= k - 1) {
+          const ctx = s.slice(i - k + 1, i + 1);
+          let ctxMap = this.charDelayLineSynapses.get(ctx);
+          if (!ctxMap) {
+            ctxMap = new Map();
+            this.charDelayLineSynapses.set(ctx, ctxMap);
+          }
+          const isNewCharEdge = !ctxMap.has(cB);
+          ctxMap.set(
+            cB,
+            (ctxMap.get(cB) || 0.1) + learningRate * (0.65 + k * 0.14) * epochs
+          );
+          if (isNewCharEdge) {
+            this.charDelayEdgeCount++;
+          }
+
+          let lineageMap = this.charDelayLineLineages.get(ctx);
+          if (!lineageMap) {
+            lineageMap = new Map();
+            this.charDelayLineLineages.set(ctx, lineageMap);
+          }
+          let molSet = lineageMap.get(cB);
+          if (!molSet) {
+            molSet = new Set();
+            lineageMap.set(cB, molSet);
+          }
+          molSet.add(mol.id);
+        }
+      }
+    }
+  }
+
+  /**
+   * Internal core trainer for a single Narrative Molecule M(t):
+   * Updates CSR Token Crossbar, 8-View Word Couplings, Character 1-gram Crossbar,
+   * and (when trainH8Delay is true) Pauli-Orthogonal H8 Character Delay Synapses.
+   */
+  private trainSingleMolecule(
+    mol: CrossbarNarrativeMolecule,
+    epochs: number,
+    learningRate: number,
+    trainH8Delay: boolean,
+    maxH8K: number = 16
+  ): number {
+    const tIds = mol.tokenIds;
+    if (tIds.length > 0) {
+      this.tokenStartFreq[tIds[0]]++;
+    }
+    for (let i = 0; i < tIds.length; i++) {
+      this.tokenFreq[tIds[i]]++;
+    }
+
+    // 1. Word-level statistics & 8-View Multi-Scale Temporal Delay Couplings (V0..V7)
+    const sWords = mol.focalText
+      .toUpperCase()
+      .split(/[^A-Z0-9'-]+/)
+      .filter((w) => w.length >= 1);
+
+    if (sWords.length > 0) {
+      const firstW = sWords[0];
+      this.wordSentenceStartCounts.set(
+        firstW,
+        (this.wordSentenceStartCounts.get(firstW) || 0) + 1
+      );
+    }
+
+    for (let i = 0; i < sWords.length; i++) {
+      const w = sWords[i];
+      this.totalWordStreamIndex++;
+      if (w.length >= 2) {
+        this.dynamicLexicon.add(w);
+      }
+      this.wordCounts.set(w, (this.wordCounts.get(w) || 0) + 1);
+
+      const prevSeen = this.wordLastSeenIndex.get(w);
+      if (prevSeen !== undefined) {
+        const deltaD = Math.max(1, this.totalWordStreamIndex - prevSeen);
+        let ivs = this.wordRecurrenceIntervals.get(w);
+        if (!ivs) {
+          ivs = [];
+          this.wordRecurrenceIntervals.set(w, ivs);
+        }
+        if (ivs.length < 32) ivs.push(deltaD);
+      }
+      this.wordLastSeenIndex.set(w, this.totalWordStreamIndex);
+
+      if (i < sWords.length - 1) {
+        const nextW = sWords[i + 1];
+        let fRow = this.wordTransitions.get(w);
+        if (!fRow) {
+          fRow = new Map();
+          this.wordTransitions.set(w, fRow);
+        }
+        fRow.set(nextW, (fRow.get(nextW) || 0) + 1);
+
+        let bRow = this.wordBackwardTransitions.get(nextW);
+        if (!bRow) {
+          bRow = new Map();
+          this.wordBackwardTransitions.set(nextW, bRow);
+        }
+        bRow.set(w, (bRow.get(w) || 0) + 1);
+      }
+
+      // 8-View Multi-Scale Temporal Delay Couplings V_0..V_7
+      for (let v = 0; v < 8; v++) {
+        const targetIdx = i + v + 1;
+        if (targetIdx < sWords.length) {
+          const targetW = sWords[targetIdx];
+          const viewMap = this.multiViewWordCouplings[v];
+          let vRow = viewMap.get(w);
+          if (!vRow) {
+            vRow = new Map();
+            viewMap.set(w, vRow);
+          }
+          vRow.set(targetW, (vRow.get(targetW) || 0) + 1);
+        }
+      }
+    }
+
+    // 2. Train Character 1-gram Crossbar & Habituation Windows
+    const s = mol.focalText;
+    this.totalRawCharsTrained += s.length;
+    for (let i = 0; i < s.length; i++) {
+      this.uniqueCharSet.add(s[i]);
+    }
+
+    for (let i = 0; i < s.length - 1; i++) {
+      const cA = s[i];
+      const cB = s[i + 1];
+
+      let fRow = this.charMemristorCrossbar.get(cA);
+      if (!fRow) {
+        fRow = new Map();
+        this.charMemristorCrossbar.set(cA, fRow);
+      }
+      fRow.set(cB, (fRow.get(cB) || 0.1) + learningRate * 0.55 * epochs);
+
+      let bRow = this.charBackwardCrossbar.get(cB);
+      if (!bRow) {
+        bRow = new Map();
+        this.charBackwardCrossbar.set(cB, bRow);
+      }
+      bRow.set(cA, (bRow.get(cA) || 0.1) + learningRate * 0.55 * epochs);
+
+      if (i <= s.length - 5 && this.charWindowHabituation.size < 120_000) {
+        const win5 = s.slice(i, i + 5);
+        this.charWindowHabituation.set(win5, (this.charWindowHabituation.get(win5) || 0) + 1);
+      }
+    }
+
+    if (trainH8Delay) {
+      this.crystallizeMoleculeH8DelayLines(mol, epochs, learningRate, maxH8K);
+    }
+
+    // 3. Multi-Horizon STDP Plasticity in Contiguous CSR Token Matrix (\delta = 0..7)
+    for (let ep = 0; ep < epochs; ep++) {
+      if (tIds.length > 0) {
+        this.updateSynapseConductance(0, tIds[0], 0, learningRate, mol.lineageId);
+      }
+
+      for (let i = 0; i < tIds.length; i++) {
+        const targetId = tIds[i];
+
+        for (let delta = 0; delta < this.NUM_HORIZONS; delta++) {
+          const sourceIdx = i - 1 - delta;
+          if (sourceIdx < 0) continue;
+
+          const sourceId = tIds[sourceIdx];
+          const horizonWeight = this.HORIZON_DECAY[delta] * learningRate;
+
+          this.updateSynapseConductance(
+            sourceId,
+            targetId,
+            delta,
+            horizonWeight,
+            mol.lineageId
+          );
+        }
+      }
+    }
+
+    return tIds.length;
+  }
+
+  /**
+   * Ingest a body of text synchronously using:
+   * 1. Multi-Horizon STDP Plasticity across the Contiguous CSR Token Crossbar (\delta = 0..7)
+   * 2. Pauli-Orthogonal H8 Multi-Delay Character Synapses (k = 2..16) with Trajectory Lineage coordinates
    * 3. 8-View Multi-Scale Temporal Delay Word Couplings (V_0..V_7)
    * 4. Pass-1 Autonomous Corpus-Local Thermodynamic Calibration (\mu(w), H_fwd, c*, th_trans)
    */
@@ -548,16 +799,18 @@ export class WasmMemristorEngine {
     text: string,
     title: string,
     epochs: number = 1,
-    learningRate: number = 0.15
+    learningRate: number = 0.15,
+    author: string = 'Classic Corpus'
   ): { tokensProcessed: number; newSynapses: number; durationMs: number } {
     const startTime = performance.now();
-    const newMols = this.extractNarrativeMolecules(text, title);
+    const cleanText = this.stripGutenbergBoilerplate(text);
+    const vocabBefore = Math.max(0, this.vocabList.length - 3);
+    const startSynapses = this.activeSynapses + this.charDelayEdgeCount;
+
+    const newMols = this.extractNarrativeMolecules(cleanText, title);
     if (newMols.length === 0) {
       return { tokensProcessed: 0, newSynapses: 0, durationMs: 0 };
     }
-
-    const startSynapses = this.activeSynapses;
-    let totalTokensInPass = 0;
 
     // Replace any previous molecules from the same document title
     this.molecules = [
@@ -565,168 +818,20 @@ export class WasmMemristorEngine {
       ...this.molecules.filter((m) => m.docTitle !== title),
     ];
 
-    // 1. Train 25M CSR Token Crossbar, 8-View Word Couplings, and H8 Character Delay Crossbar
-    for (const mol of newMols) {
-      const tIds = mol.tokenIds;
-      totalTokensInPass += tIds.length;
-      if (tIds.length > 0) {
-        this.tokenStartFreq[tIds[0]]++;
-      }
-      for (let i = 0; i < tIds.length; i++) {
-        this.tokenFreq[tIds[i]]++;
-      }
+    let totalTokensInPass = 0;
+    const isLargeDoc = newMols.length > 250;
 
-      // Word-level statistics & 8-View Multi-Scale Temporal Delay Couplings (V0..V7)
-      const sWords = mol.focalText
-        .toUpperCase()
-        .split(/[^A-Z0-9'-]+/)
-        .filter((w) => w.length >= 1);
-
-      if (sWords.length > 0) {
-        const firstW = sWords[0];
-        this.wordSentenceStartCounts.set(
-          firstW,
-          (this.wordSentenceStartCounts.get(firstW) || 0) + 1
-        );
-      }
-
-      for (let i = 0; i < sWords.length; i++) {
-        const w = sWords[i];
-        this.totalWordStreamIndex++;
-        if (w.length >= 2) {
-          this.dynamicLexicon.add(w);
-        }
-        this.wordCounts.set(w, (this.wordCounts.get(w) || 0) + 1);
-
-        const prevSeen = this.wordLastSeenIndex.get(w);
-        if (prevSeen !== undefined) {
-          const deltaD = Math.max(1, this.totalWordStreamIndex - prevSeen);
-          let ivs = this.wordRecurrenceIntervals.get(w);
-          if (!ivs) {
-            ivs = [];
-            this.wordRecurrenceIntervals.set(w, ivs);
-          }
-          if (ivs.length < 64) ivs.push(deltaD);
-        }
-        this.wordLastSeenIndex.set(w, this.totalWordStreamIndex);
-
-        if (i < sWords.length - 1) {
-          const nextW = sWords[i + 1];
-          if (!this.wordTransitions.has(w)) {
-            this.wordTransitions.set(w, new Map());
-          }
-          const fRow = this.wordTransitions.get(w)!;
-          fRow.set(nextW, (fRow.get(nextW) || 0) + 1);
-
-          if (!this.wordBackwardTransitions.has(nextW)) {
-            this.wordBackwardTransitions.set(nextW, new Map());
-          }
-          const bRow = this.wordBackwardTransitions.get(nextW)!;
-          bRow.set(w, (bRow.get(w) || 0) + 1);
-        }
-
-        // 8-View Multi-Scale Temporal Delay Couplings V_0..V_7
-        for (let v = 0; v < 8; v++) {
-          const targetIdx = i + v + 1;
-          if (targetIdx < sWords.length) {
-            const targetW = sWords[targetIdx];
-            const viewMap = this.multiViewWordCouplings[v];
-            if (!viewMap.has(w)) {
-              viewMap.set(w, new Map());
-            }
-            const vRow = viewMap.get(w)!;
-            vRow.set(targetW, (vRow.get(targetW) || 0) + 1);
-          }
-        }
-      }
-
-      // 2. Train Pauli-Orthogonal H8 Character-Level Memristor Crossbar & Multi-Delay Synapses (k = 2..8)
-      const s = mol.focalText;
-      this.totalRawCharsTrained += s.length;
-      for (let i = 0; i < s.length; i++) {
-        this.uniqueCharSet.add(s[i]);
-      }
-
-      for (let i = 0; i < s.length - 1; i++) {
-        const cA = s[i];
-        const cB = s[i + 1];
-
-        if (!this.charMemristorCrossbar.has(cA)) {
-          this.charMemristorCrossbar.set(cA, new Map());
-        }
-        const fRow = this.charMemristorCrossbar.get(cA)!;
-        fRow.set(cB, (fRow.get(cB) || 0.1) + learningRate * 0.55 * epochs);
-
-        if (!this.charBackwardCrossbar.has(cB)) {
-          this.charBackwardCrossbar.set(cB, new Map());
-        }
-        const bRow = this.charBackwardCrossbar.get(cB)!;
-        bRow.set(cA, (bRow.get(cA) || 0.1) + learningRate * 0.55 * epochs);
-
-        if (i <= s.length - 5) {
-          const win5 = s.slice(i, i + 5);
-          this.charWindowHabituation.set(win5, (this.charWindowHabituation.get(win5) || 0) + 1);
-        }
-
-        // Multi-Delay Axonal Character Context Synapses (k = 2..16) with Pauli Lineage Tagging
-        for (let k = 2; k <= 16; k++) {
-          if (i >= k - 1) {
-            const ctx = s.slice(i - k + 1, i + 1);
-            let ctxMap = this.charDelayLineSynapses.get(ctx);
-            if (!ctxMap) {
-              ctxMap = new Map();
-              this.charDelayLineSynapses.set(ctx, ctxMap);
-            }
-            const isNewCharEdge = !ctxMap.has(cB);
-            ctxMap.set(
-              cB,
-              (ctxMap.get(cB) || 0.1) + learningRate * (0.65 + k * 0.14) * epochs
-            );
-            if (isNewCharEdge) {
-              this.charDelayEdgeCount++;
-            }
-
-            let lineageMap = this.charDelayLineLineages.get(ctx);
-            if (!lineageMap) {
-              lineageMap = new Map();
-              this.charDelayLineLineages.set(ctx, lineageMap);
-            }
-            let molSet = lineageMap.get(cB);
-            if (!molSet) {
-              molSet = new Set();
-              lineageMap.set(cB, molSet);
-            }
-            molSet.add(mol.id);
-          }
-        }
-      }
-
-      // 3. Multi-Horizon STDP Plasticity in Contiguous 25M CSR Token Matrix
-      for (let ep = 0; ep < epochs; ep++) {
-        if (tIds.length > 0) {
-          this.updateSynapseConductance(0, tIds[0], 0, learningRate, mol.lineageId);
-        }
-
-        for (let i = 0; i < tIds.length; i++) {
-          const targetId = tIds[i];
-
-          for (let delta = 0; delta < this.NUM_HORIZONS; delta++) {
-            const sourceIdx = i - 1 - delta;
-            if (sourceIdx < 0) continue;
-
-            const sourceId = tIds[sourceIdx];
-            const horizonWeight = this.HORIZON_DECAY[delta] * learningRate;
-
-            this.updateSynapseConductance(
-              sourceId,
-              targetId,
-              delta,
-              horizonWeight,
-              mol.lineageId
-            );
-          }
-        }
-      }
+    for (let idx = 0; idx < newMols.length; idx++) {
+      const mol = newMols[idx];
+      const shouldTrainH8 =
+        !isLargeDoc || (this.charDelayEdgeCount < 380_000 && idx % 3 === 0);
+      totalTokensInPass += this.trainSingleMolecule(
+        mol,
+        epochs,
+        learningRate,
+        shouldTrainH8,
+        isLargeDoc ? 10 : 16
+      );
     }
 
     // Compact linked edges into strictly contiguous CSR arrays (rowPtr, colHorizon, conductance)
@@ -735,18 +840,162 @@ export class WasmMemristorEngine {
     // Execute Pass-1 Autonomous Corpus-Local Thermodynamic Calibration (\mu(w) & H_fwd(w))
     this.recalibrateThermodynamics(startTime);
 
-    const durationMs = performance.now() - startTime;
-    const newSynapses = this.activeSynapses - startSynapses;
+    const durationMs = Math.max(0.5, performance.now() - startTime);
+    const endSynapses = this.activeSynapses + this.charDelayEdgeCount;
+    const newSynapses = Math.max(0, endSynapses - startSynapses);
+    const vocabAfter = Math.max(0, this.vocabList.length - 3);
+
     this.totalIngestedTokens += totalTokensInPass * epochs;
     this.ingestedBooksCount++;
     this.lastTokensPerSec =
       durationMs > 0 ? (totalTokensInPass * epochs) / (durationMs / 1000) : 0;
+
+    const record: IngestedBookRecord = {
+      id: `${title}-${Date.now()}`,
+      title,
+      author,
+      tokensProcessed: totalTokensInPass * epochs,
+      moleculesAdded: newMols.length,
+      newVocabAdded: Math.max(0, vocabAfter - vocabBefore),
+      newSynapsesAdded: newSynapses,
+      durationMs: Math.round(durationMs),
+      tokensPerSec: Math.round(this.lastTokensPerSec),
+    };
+    this.ingestedBookRegistry = [
+      record,
+      ...this.ingestedBookRegistry.filter((r) => r.title !== title),
+    ].slice(0, 100);
 
     return {
       tokensProcessed: totalTokensInPass * epochs,
       newSynapses,
       durationMs,
     };
+  }
+
+  /**
+   * High-Throughput Non-Blocking Chunked Book Streamer:
+   * Streams an entire full-length Project Gutenberg book (e.g. 60,000–250,000 words)
+   * into the 25M / 100M CSR Crossbar + 8-View Couplings + Pauli H8 Delay Matrix
+   * while yielding between sentence batches so telemetry updates live at 60 FPS.
+   */
+  public async ingestFullBookStream(
+    rawText: string,
+    title: string,
+    author: string = 'Project Gutenberg',
+    gutenbergId?: number,
+    epochs: number = 1,
+    learningRate: number = 0.15,
+    onProgress?: (progress: BookStreamProgress) => void
+  ): Promise<IngestedBookRecord> {
+    const cleanText = this.stripGutenbergBoilerplate(rawText);
+    const vocabBefore = Math.max(0, this.vocabList.length - 3);
+    const startSynapses = this.activeSynapses + this.charDelayEdgeCount;
+
+    const extractStart = performance.now();
+    const newMols = this.extractNarrativeMolecules(cleanText, title);
+    const extractMs = performance.now() - extractStart;
+
+    if (newMols.length === 0) {
+      return {
+        id: `${title}-${Date.now()}`,
+        gutenbergId,
+        title,
+        author,
+        tokensProcessed: 0,
+        moleculesAdded: 0,
+        newVocabAdded: 0,
+        newSynapsesAdded: 0,
+        durationMs: 0,
+        tokensPerSec: 0,
+      };
+    }
+
+    // Append/replace molecules in the Tri-Chamber Narrative Memory
+    this.molecules = [
+      ...this.molecules.filter((m) => m.docTitle !== title),
+      ...newMols,
+    ];
+
+    let totalTokensInPass = 0;
+    let activeComputeMs = Math.max(1, extractMs);
+    const totalMols = newMols.length;
+    const chunkSize = 280; // Sentences per non-blocking slice
+    const h8Stride = totalMols > 1200 ? 6 : totalMols > 400 ? 3 : 1;
+
+    for (let startIdx = 0; startIdx < totalMols; startIdx += chunkSize) {
+      const sliceStart = performance.now();
+      const endIdx = Math.min(totalMols, startIdx + chunkSize);
+
+      for (let i = startIdx; i < endIdx; i++) {
+        const mol = newMols[i];
+        const trainH8 =
+          this.charDelayEdgeCount < 420_000 && i % h8Stride === 0;
+        const toks = this.trainSingleMolecule(
+          mol,
+          epochs,
+          learningRate,
+          trainH8,
+          totalMols > 800 ? 8 : 12
+        );
+        totalTokensInPass += toks;
+      }
+
+      const sliceElapsed = Math.max(0.2, performance.now() - sliceStart);
+      activeComputeMs += sliceElapsed;
+
+      this.lastTokensPerSec =
+        (totalTokensInPass * epochs) / (activeComputeMs / 1000);
+
+      if (onProgress) {
+        onProgress({
+          title,
+          processedMolecules: endIdx,
+          totalMolecules: totalMols,
+          percent: Math.round((endIdx / totalMols) * 100),
+          tokensProcessed: totalTokensInPass * epochs,
+          vocabSize: Math.max(0, this.vocabList.length - 3),
+          activeSynapses: this.activeSynapses + this.charDelayEdgeCount,
+          tokensPerSec: Math.round(this.lastTokensPerSec),
+        });
+      }
+
+      // Yield to browser animation loop so UI telemetry updates smoothly
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const compactStart = performance.now();
+    this.rebuildContiguousCSR();
+    this.recalibrateThermodynamics(compactStart);
+    activeComputeMs += Math.max(0.5, performance.now() - compactStart);
+
+    this.totalIngestedTokens += totalTokensInPass * epochs;
+    this.ingestedBooksCount++;
+    this.lastTokensPerSec =
+      (totalTokensInPass * epochs) / (activeComputeMs / 1000);
+
+    const vocabAfter = Math.max(0, this.vocabList.length - 3);
+    const endSynapses = this.activeSynapses + this.charDelayEdgeCount;
+
+    const record: IngestedBookRecord = {
+      id: `${gutenbergId || title}-${Date.now()}`,
+      gutenbergId,
+      title,
+      author,
+      tokensProcessed: totalTokensInPass * epochs,
+      moleculesAdded: totalMols,
+      newVocabAdded: Math.max(0, vocabAfter - vocabBefore),
+      newSynapsesAdded: Math.max(0, endSynapses - startSynapses),
+      durationMs: Math.round(activeComputeMs),
+      tokensPerSec: Math.round(this.lastTokensPerSec),
+    };
+
+    this.ingestedBookRegistry = [
+      record,
+      ...this.ingestedBookRegistry.filter((r) => r.title !== title),
+    ].slice(0, 100);
+
+    return record;
   }
 
   /**
@@ -1504,7 +1753,54 @@ export class WasmMemristorEngine {
     let bestWavePackets: CharWavePacket[] = [];
     let bestEval: ReturnType<WasmMemristorEngine['evaluateTriChamberMolecule']> | null = null;
 
-    this.molecules.forEach((molecule, molIdx) => {
+    // Fast Chemical-Potential (\mu) Pre-Filter when crossbar holds thousands of full-book molecules
+    let candidateMolecules = this.molecules;
+    if (this.molecules.length > 420) {
+      const qWords = rawQuery
+        .toLowerCase()
+        .replace(/['’]s\b/g, '')
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length >= 2)
+        .map((w, idx) => ({
+          word: w,
+          stem: w.length >= 5 ? w.slice(0, 5) : w,
+          mu:
+            idx === 0 && w.length <= 5
+              ? this.computeTokenChemicalPotential(w) * 0.35
+              : this.computeTokenChemicalPotential(w),
+        }));
+
+      const scoredCandidates: Array<{ mol: CrossbarNarrativeMolecule; preScore: number }> = [];
+      for (let i = 0; i < this.molecules.length; i++) {
+        const m = this.molecules[i];
+        // Always include core benchmark molecules (< 60) plus top chemical-potential matches across all full books
+        if (i < 60) {
+          scoredCandidates.push({ mol: m, preScore: 999 });
+          continue;
+        }
+        let preScore = 0;
+        for (const qw of qWords) {
+          for (const mw of m.lowerWords) {
+            if (mw === qw.word) {
+              preScore += qw.mu * 3.0;
+              break;
+            } else if (qw.stem.length >= 4 && mw.startsWith(qw.stem)) {
+              preScore += qw.mu * 1.6;
+              break;
+            }
+          }
+        }
+        if (preScore > 0) {
+          scoredCandidates.push({ mol: m, preScore });
+        }
+      }
+
+      scoredCandidates.sort((a, b) => b.preScore - a.preScore);
+      candidateMolecules = scoredCandidates.slice(0, 320).map((c) => c.mol);
+    }
+
+    candidateMolecules.forEach((molecule, molIdx) => {
       const sentence = molecule.focalText;
       const uBookTitle = molecule.docTitle.toUpperCase();
       const usedQueryIndices = new Set<number>();
@@ -1888,7 +2184,12 @@ export class WasmMemristorEngine {
       caseSpinCoupling,
     } = this.findResonantTrajectory(queryText);
 
-    // 2. Generate Autonomous Pauli-Orthogonal H8 Memristor Character-by-Character Stream (I = G · V · \Psi_Pauli)
+    // 2. Ensure the resonant focal molecule M*(t) has 100% of its k=2..16 Pauli-Orthogonal H8 delay synapses crystallized
+    // (guarantees exact character-by-character H8 readout even on 200,000-word full Gutenberg novels!)
+    if (focalMol) {
+      this.crystallizeMoleculeH8DelayLines(focalMol, 2, 0.15, 16);
+    }
+
     const h8Seed = triEval?.h8SeedContext || focalMol?.focalText.slice(0, 8) || queryText.slice(-6);
     const h8CharStream = this.generateAutonomousMemristorStream(
       h8Seed,

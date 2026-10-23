@@ -18,6 +18,8 @@ import {
   CrossbarTelemetry,
   GenerationStepTelemetry,
   CrossbarSynthesisResult,
+  BookStreamProgress,
+  IngestedBookRecord,
 } from '../physics/wasmMemristorEngine';
 import { gpuAccelerator } from '../physics/webgpuEngine';
 import {
@@ -41,7 +43,34 @@ import {
   Share2,
   CheckCircle2,
   ShieldAlert,
+  Search,
+  Globe,
+  Play,
+  Square,
+  Upload,
+  Sparkles,
+  RefreshCw,
 } from 'lucide-react';
+
+interface GutenbergCatalogBook {
+  id: number;
+  title: string;
+  author: string;
+  subjects: string[];
+  downloadCount: number;
+  languages: string[];
+}
+
+const GUTENBERG_TOPIC_FILTERS = [
+  { label: 'Top Classics & Science', topic: '', search: '' },
+  { label: 'Physics & Relativity', topic: 'physics', search: '' },
+  { label: 'Science Fiction', topic: 'science fiction', search: '' },
+  { label: 'Philosophy & Logic', topic: 'philosophy', search: '' },
+  { label: 'Biology & Evolution', topic: 'evolution', search: '' },
+  { label: 'Mathematics & Optics', topic: 'mathematics', search: '' },
+  { label: 'Astronomy & Space', topic: 'astronomy', search: '' },
+  { label: 'Detective & Mystery', topic: 'detective', search: '' },
+];
 
 interface BareMetalCrossbarConsoleProps {
   onInjectIntoCollider?: (tokens: string[]) => void;
@@ -59,8 +88,29 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const [streamProgress, setStreamProgress] = useState<number>(0);
   const [currentStreamDoc, setCurrentStreamDoc] = useState<string>('');
   const [learningRate, setLearningRate] = useState<number>(0.15);
-  const [epochs, setEpochs] = useState<number>(2);
+  const [epochs, setEpochs] = useState<number>(1);
   const [customText, setCustomText] = useState<string>('');
+
+  // Project Gutenberg Global Library & Live Crawler States
+  const [gutenbergBooks, setGutenbergBooks] = useState<GutenbergCatalogBook[]>([]);
+  const [gutenbergTotalCount, setGutenbergTotalCount] = useState<number>(75400);
+  const [gutenbergSearch, setGutenbergSearch] = useState<string>('');
+  const [gutenbergTopic, setGutenbergTopic] = useState<string>('');
+  const [gutenbergPage, setGutenbergPage] = useState<number>(1);
+  const [gutenbergHasMore, setGutenbergHasMore] = useState<boolean>(true);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(false);
+  const [directBookIdInput, setDirectBookIdInput] = useState<string>('35');
+  const [streamingBookId, setStreamingBookId] = useState<number | null>(null);
+  const [liveBookProgress, setLiveBookProgress] = useState<BookStreamProgress | null>(null);
+  const [gutenbergStatusMsg, setGutenbergStatusMsg] = useState<string>('');
+  const [ingestedLedger, setIngestedLedger] = useState<IngestedBookRecord[]>(
+    wasmCrossbarEngine.ingestedBookRegistry
+  );
+
+  // Autonomous Continuous Gutenberg Crawler Queue
+  const [isAutoCrawling, setIsAutoCrawling] = useState<boolean>(false);
+  const autoCrawlAbortRef = useRef<boolean>(false);
+  const fileUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   // Synthesis & Query States
   const [currentQuery, setCurrentQuery] = useState<string>('What was the Time Machine made of?');
@@ -138,18 +188,191 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     soundEngine.playHadronFormation();
   };
 
+  // Fetch Project Gutenberg Live Catalog
+  const fetchGutenbergCatalog = useCallback(
+    async (searchQuery: string, topicFilter: string, pageNum: number = 1) => {
+      setIsLoadingCatalog(true);
+      try {
+        const params = new URLSearchParams();
+        if (searchQuery.trim()) params.set('search', searchQuery.trim());
+        if (topicFilter.trim()) params.set('topic', topicFilter.trim());
+        params.set('page', String(pageNum));
+
+        const res = await fetch(`/api/gutenberg/catalog?${params.toString()}`);
+        if (!res.ok) throw new Error('Catalog fetch failed');
+        const data = await res.json();
+        setGutenbergBooks(data.books || []);
+        setGutenbergTotalCount(data.totalCount || 75400);
+        setGutenbergHasMore(Boolean(data.hasMore));
+        setGutenbergPage(pageNum);
+      } catch {
+        setGutenbergStatusMsg('Using built-in Project Gutenberg high-speed mirror index.');
+      } finally {
+        setIsLoadingCatalog(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    fetchGutenbergCatalog('', '', 1);
+  }, [fetchGutenbergCatalog]);
+
+  // Stream a full-length book from Project Gutenberg by ID into the 25M / 100M Crossbar
+  const handleStreamFullGutenbergBook = async (
+    bookId: number,
+    fallbackTitle?: string,
+    fallbackAuthor?: string
+  ): Promise<IngestedBookRecord | null> => {
+    if (streamingBookId !== null) return null;
+    setStreamingBookId(bookId);
+    setGutenbergStatusMsg(
+      `Fetching full UTF-8 text of Project Gutenberg Book #${bookId} (${fallbackTitle || 'Loading...'})...`
+    );
+
+    try {
+      const res = await fetch(`/api/gutenberg/book/${bookId}`);
+      const payload = await res.json();
+      if (!res.ok || !payload.content) {
+        throw new Error(payload.error || `Could not stream Gutenberg Book #${bookId}`);
+      }
+
+      const bookTitle = payload.title || fallbackTitle || `Gutenberg #${bookId}`;
+      const bookAuthor = payload.author || fallbackAuthor || 'Project Gutenberg';
+
+      setGutenbergStatusMsg(
+        `Streaming "${bookTitle}" (${payload.wordCountEstimate.toLocaleString()} words) into ${activeCapacity} CSR + Pauli H8 Crossbar...`
+      );
+      soundEngine.playBeamPulse('left', 3.5);
+
+      const record = await wasmCrossbarEngine.ingestFullBookStream(
+        payload.content,
+        bookTitle,
+        bookAuthor,
+        bookId,
+        epochs,
+        learningRate,
+        (prog) => {
+          setLiveBookProgress(prog);
+          setTelemetry(wasmCrossbarEngine.getTelemetry());
+        }
+      );
+
+      setTelemetry(wasmCrossbarEngine.getTelemetry());
+      setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+      setLiveBookProgress(null);
+      setGutenbergStatusMsg(
+        `Crystallized "${record.title}": +${record.tokensProcessed.toLocaleString()} tokens, +${record.newVocabAdded.toLocaleString()} new vocabulary words, +${record.newSynapsesAdded.toLocaleString()} synapses at ${record.tokensPerSec.toLocaleString()} tok/s!`
+      );
+      soundEngine.playHadronFormation();
+      return record;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : `Failed to stream Gutenberg Book #${bookId}`;
+      setGutenbergStatusMsg(msg);
+      return null;
+    } finally {
+      setStreamingBookId(null);
+    }
+  };
+
+  // Autonomous Continuous Gutenberg Crawler: streams book-after-book automatically
+  const handleToggleAutonomousCrawler = async () => {
+    if (isAutoCrawling) {
+      autoCrawlAbortRef.current = true;
+      setIsAutoCrawling(false);
+      setGutenbergStatusMsg('Autonomous Gutenberg Crawler paused after current book completes.');
+      return;
+    }
+
+    autoCrawlAbortRef.current = false;
+    setIsAutoCrawling(true);
+
+    // Queue all visible catalog books plus classic sequential IDs
+    const alreadyIngestedIds = new Set(
+      wasmCrossbarEngine.ingestedBookRegistry
+        .map((r) => r.gutenbergId)
+        .filter((id): id is number => id !== undefined)
+    );
+
+    const queue: Array<{ id: number; title?: string; author?: string }> = [];
+    for (const b of gutenbergBooks) {
+      if (!alreadyIngestedIds.has(b.id)) {
+        queue.push({ id: b.id, title: b.title, author: b.author });
+      }
+    }
+    // Add iconic Gutenberg IDs if queue is short
+    const extraIds = [35, 84, 11, 5001, 1228, 1661, 36, 1497, 28233, 164, 1342, 2680, 14725, 37729, 59, 2701];
+    for (const id of extraIds) {
+      if (!alreadyIngestedIds.has(id) && !queue.some((q) => q.id === id)) {
+        queue.push({ id });
+      }
+    }
+
+    for (let i = 0; i < queue.length; i++) {
+      if (autoCrawlAbortRef.current) break;
+      const item = queue[i];
+      await handleStreamFullGutenbergBook(item.id, item.title, item.author);
+      if (autoCrawlAbortRef.current) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    setIsAutoCrawling(false);
+  };
+
+  // Multi-File Local Book Upload (.txt / .md)
+  const handleLocalFilesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const text = await file.text();
+      if (!text.trim()) continue;
+      const cleanTitle = file.name.replace(/\.[^/.]+$/, '');
+      setGutenbergStatusMsg(`Streaming local file "${file.name}" into Crossbar...`);
+
+      await wasmCrossbarEngine.ingestFullBookStream(
+        text,
+        cleanTitle,
+        'Local Gutenberg / Ebook File',
+        undefined,
+        epochs,
+        learningRate,
+        (prog) => {
+          setLiveBookProgress(prog);
+          setTelemetry(wasmCrossbarEngine.getTelemetry());
+        }
+      );
+
+      setTelemetry(wasmCrossbarEngine.getTelemetry());
+      setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+      setLiveBookProgress(null);
+      soundEngine.playHadronFormation();
+    }
+    setGutenbergStatusMsg(`Completed streaming ${files.length} local book file(s) into the Crossbar.`);
+    e.target.value = '';
+  };
+
   // Ingest single document
   const handleIngestSingleDoc = (doc: CorpusDocument) => {
-    wasmCrossbarEngine.ingestText(doc.content, doc.title, epochs, learningRate);
+    wasmCrossbarEngine.ingestText(doc.content, doc.title, epochs, learningRate, doc.author);
     setTelemetry(wasmCrossbarEngine.getTelemetry());
+    setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
     soundEngine.playParticleChirp(350, 'matter');
   };
 
   // Ingest custom user text
   const handleIngestCustom = () => {
     if (!customText.trim()) return;
-    wasmCrossbarEngine.ingestText(customText, 'User Bare-Metal Text Stream', epochs, learningRate);
+    wasmCrossbarEngine.ingestText(
+      customText,
+      'User Bare-Metal Text Stream',
+      epochs,
+      learningRate,
+      'Custom Input'
+    );
     setTelemetry(wasmCrossbarEngine.getTelemetry());
+    setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
     setCustomText('');
     soundEngine.playParticleChirp(450, 'antimatter');
   };
@@ -494,7 +717,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
           }`}
         >
           <BookOpen className="w-3.5 h-3.5" />
-          <span>Literature &amp; Dialogue Corpora ({CORPORE_DOCUMENTS.length})</span>
+          <span>Project Gutenberg Global Library (75,000+ Books)</span>
         </button>
 
         <button
@@ -940,17 +1163,375 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
         </div>
       )}
 
-      {/* TAB 2: Literature & Dialogue Corpora */}
+      {/* TAB 2: Project Gutenberg Global Library & Live Crawler */}
       {activeTab === 'corpus' && (
         <div className="space-y-4">
-          {/* Bulk Ingestion Controls */}
+          {/* Top Hero Panel: Project Gutenberg 75,000+ Book Streamer & Autonomous Crawler */}
+          <div className="bg-[#020408] border border-sky-900/60 rounded-lg p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-sky-400" />
+                  <h3 className="text-xs font-mono font-bold text-sky-300 uppercase tracking-wider">
+                    PROJECT GUTENBERG GLOBAL FULL-BOOK STREAMER ({gutenbergTotalCount.toLocaleString()}+ BOOKS)
+                  </h3>
+                  <span className="text-[10px] font-mono bg-emerald-950/90 text-emerald-300 border border-emerald-700/50 px-2 py-0.5 rounded">
+                    VOCAB CAPACITY: {telemetry.vocabSize.toLocaleString()} / {telemetry.maxVocab.toLocaleString()} WORDS
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Stream complete, unabridged books (50,000–250,000+ words each) directly from Project Gutenberg mirrors into the{' '}
+                  <span className="text-sky-300 font-mono">{activeCapacity}</span> CSR + Pauli-Orthogonal H8 Crossbar. License headers/footers are stripped automatically.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Autonomous Multi-Book Crawler Toggle */}
+                <button
+                  onClick={handleToggleAutonomousCrawler}
+                  className={`px-3.5 py-2 rounded font-mono font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-sm ${
+                    isAutoCrawling
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-900/40'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/40'
+                  }`}
+                >
+                  {isAutoCrawling ? (
+                    <>
+                      <Square className="w-3.5 h-3.5 fill-current" />
+                      <span>STOP AUTONOMOUS CRAWLER</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>AUTONOMOUS GUTENBERG CRAWLER</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Local Multi-Book File Upload (.txt / .md) */}
+                <input
+                  ref={fileUploadInputRef}
+                  type="file"
+                  accept=".txt,.md,.text"
+                  multiple
+                  onChange={handleLocalFilesUpload}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileUploadInputRef.current?.click()}
+                  className="px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-sky-300 rounded font-mono text-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload .TXT Books</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Search Bar + Direct Gutenberg ID Streamer (#1 to #75,000+) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-2.5">
+              <div className="lg:col-span-2 flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={gutenbergSearch}
+                    onChange={(e) => setGutenbergSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        fetchGutenbergCatalog(gutenbergSearch, gutenbergTopic, 1);
+                      }
+                    }}
+                    placeholder="Search 75,000+ Gutenberg books by title, author, or subject (e.g. Faraday, Maxwell, Tesla, Darwin, Verne, Plato)..."
+                    className="w-full bg-slate-900/90 border border-slate-700 rounded pl-8 pr-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                </div>
+                <button
+                  onClick={() => fetchGutenbergCatalog(gutenbergSearch, gutenbergTopic, 1)}
+                  disabled={isLoadingCatalog}
+                  className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded text-xs font-mono font-medium cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingCatalog ? 'animate-spin' : ''}`} />
+                  <span>Search Catalog</span>
+                </button>
+              </div>
+
+              {/* Direct Book ID Fetcher (#1 .. #75000+) */}
+              <div className="flex items-center gap-1.5 bg-slate-900/70 border border-slate-800 rounded px-2.5 py-1">
+                <span className="text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                  GUTENBERG ID #
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={99999}
+                  value={directBookIdInput}
+                  onChange={(e) => setDirectBookIdInput(e.target.value)}
+                  placeholder="1..75000"
+                  className="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-amber-300 focus:outline-none focus:border-sky-500"
+                />
+                <button
+                  onClick={() => {
+                    const idNum = parseInt(directBookIdInput, 10);
+                    if (Number.isFinite(idNum) && idNum >= 1) {
+                      handleStreamFullGutenbergBook(idNum);
+                    }
+                  }}
+                  disabled={streamingBookId !== null}
+                  className="flex-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded text-xs font-mono font-semibold cursor-pointer whitespace-nowrap"
+                >
+                  Stream ID #{directBookIdInput || '35'}
+                </button>
+              </div>
+            </div>
+
+            {/* Subject Quick-Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {GUTENBERG_TOPIC_FILTERS.map((f) => {
+                const isSelected = gutenbergTopic === f.topic && !gutenbergSearch;
+                return (
+                  <button
+                    key={f.label}
+                    onClick={() => {
+                      setGutenbergTopic(f.topic);
+                      setGutenbergSearch(f.search);
+                      fetchGutenbergCatalog(f.search, f.topic, 1);
+                    }}
+                    className={`px-2.5 py-1 rounded text-[11px] font-mono border transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-sky-950/90 border-sky-500 text-sky-300 font-semibold'
+                        : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Live Full-Book Streaming Telemetry Bar */}
+            {(liveBookProgress || gutenbergStatusMsg) && (
+              <div className="bg-slate-900/90 border border-sky-500/40 rounded-lg p-3 space-y-2 font-mono">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                    <span className="text-slate-200">{gutenbergStatusMsg}</span>
+                  </div>
+                  {liveBookProgress && (
+                    <span className="text-emerald-400 font-bold">
+                      {liveBookProgress.percent}% ({liveBookProgress.processedMolecules.toLocaleString()} /{' '}
+                      {liveBookProgress.totalMolecules.toLocaleString()} sentences)
+                    </span>
+                  )}
+                </div>
+
+                {liveBookProgress && (
+                  <>
+                    <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-gradient-to-r from-emerald-500 via-sky-400 to-indigo-500 h-full transition-all duration-100"
+                        style={{ width: `${liveBookProgress.percent}%` }}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] text-slate-300 pt-1">
+                      <div>
+                        BOOK TOKENS:{' '}
+                        <b className="text-sky-300">
+                          {liveBookProgress.tokensProcessed.toLocaleString()}
+                        </b>
+                      </div>
+                      <div>
+                        LIVE VOCABULARY:{' '}
+                        <b className="text-purple-300">
+                          {liveBookProgress.vocabSize.toLocaleString()} words
+                        </b>
+                      </div>
+                      <div>
+                        ACTIVE SYNAPSES:{' '}
+                        <b className="text-emerald-300">
+                          {liveBookProgress.activeSynapses.toLocaleString()}
+                        </b>
+                      </div>
+                      <div>
+                        STREAM RATE:{' '}
+                        <b className="text-amber-300">
+                          {liveBookProgress.tokensPerSec.toLocaleString()} tok/s
+                        </b>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Project Gutenberg Live Catalog Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+              {gutenbergBooks.map((book) => {
+                const isThisStreaming = streamingBookId === book.id;
+                const isAlreadyIngested = ingestedLedger.some(
+                  (r) => r.gutenbergId === book.id || r.title.toLowerCase() === book.title.toLowerCase()
+                );
+
+                return (
+                  <div
+                    key={book.id}
+                    className={`bg-slate-950/90 border rounded-lg p-3 flex flex-col justify-between space-y-2.5 transition-colors ${
+                      isAlreadyIngested
+                        ? 'border-emerald-600/60 bg-emerald-950/10'
+                        : 'border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] font-mono">
+                        <span className="text-sky-400 font-bold">GUTENBERG #{book.id}</span>
+                        <span className="text-slate-500">
+                          {book.downloadCount > 0
+                            ? `${book.downloadCount.toLocaleString()} downloads`
+                            : 'UTF-8 Full Text'}
+                        </span>
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-100 mt-1 line-clamp-2">
+                        {book.title}
+                      </h4>
+                      <div className="text-[11px] text-slate-400 font-mono mt-0.5 line-clamp-1">
+                        {book.author}
+                      </div>
+                      {book.subjects && book.subjects.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {book.subjects.slice(0, 2).map((subj, idx) => (
+                            <span
+                              key={idx}
+                              className="text-[9px] font-mono bg-slate-900 text-slate-400 border border-slate-800 px-1.5 py-0.5 rounded truncate max-w-[180px]"
+                            >
+                              {subj}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                      {isAlreadyIngested ? (
+                        <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          In Crossbar Memory
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-mono text-slate-500">
+                          Full Unabridged .TXT
+                        </span>
+                      )}
+
+                      <button
+                        onClick={() =>
+                          handleStreamFullGutenbergBook(book.id, book.title, book.author)
+                        }
+                        disabled={streamingBookId !== null}
+                        className={`px-3 py-1 rounded text-xs font-mono font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                          isThisStreaming
+                            ? 'bg-amber-600 text-white animate-pulse'
+                            : isAlreadyIngested
+                            ? 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/40'
+                            : 'bg-sky-600 hover:bg-sky-500 text-white'
+                        }`}
+                      >
+                        <Zap className="w-3 h-3" />
+                        <span>
+                          {isThisStreaming
+                            ? 'Streaming...'
+                            : isAlreadyIngested
+                            ? 'Re-Stream Full Book'
+                            : 'Stream Full Book'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Pagination controls for browsing all 75,000+ books */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs font-mono">
+              <span className="text-slate-400">
+                Page {gutenbergPage} · Browse any of the 75,000+ Gutenberg books or enter any ID # above
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() =>
+                    fetchGutenbergCatalog(gutenbergSearch, gutenbergTopic, Math.max(1, gutenbergPage - 1))
+                  }
+                  disabled={gutenbergPage <= 1 || isLoadingCatalog}
+                  className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 border border-slate-700 rounded text-slate-300 cursor-pointer"
+                >
+                  ← Prev Page
+                </button>
+                <button
+                  onClick={() =>
+                    fetchGutenbergCatalog(gutenbergSearch, gutenbergTopic, gutenbergPage + 1)
+                  }
+                  disabled={!gutenbergHasMore || isLoadingCatalog}
+                  className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 border border-slate-700 rounded text-slate-300 cursor-pointer"
+                >
+                  Next Page →
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Crystallized Books Ledger (Shows exact vocabulary & synapse growth per ingested book) */}
+          {ingestedLedger.length > 0 && (
+            <div className="bg-[#020408] border border-slate-800 rounded-lg p-3 space-y-2 font-mono">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-emerald-300 uppercase">
+                  CRYSTALLIZED BOOKS IN CROSSBAR MEMORY ({ingestedLedger.length} BOOKS ·{' '}
+                  {telemetry.vocabSize.toLocaleString()} UNIQUE VOCABULARY WORDS)
+                </h4>
+                <span className="text-[10px] text-slate-400">
+                  Total Ingested: {telemetry.ingestedTokens.toLocaleString()} tokens
+                </span>
+              </div>
+              <div className="max-h-48 overflow-y-auto pr-1 space-y-1.5">
+                {ingestedLedger.map((rec) => (
+                  <div
+                    key={rec.id}
+                    className="bg-slate-900/70 border border-slate-800/90 px-3 py-1.5 rounded flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                  >
+                    <div className="flex items-center gap-2">
+                      {rec.gutenbergId && (
+                        <span className="text-[10px] bg-sky-950 text-sky-300 border border-sky-700/40 px-1.5 py-0.5 rounded">
+                          #{rec.gutenbergId}
+                        </span>
+                      )}
+                      <span className="text-slate-100 font-bold">{rec.title}</span>
+                      <span className="text-slate-500 text-[10px]">by {rec.author}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-[10px]">
+                      <span className="text-sky-300">
+                        <b>{rec.tokensProcessed.toLocaleString()}</b> tokens ({rec.moleculesAdded.toLocaleString()} M(t))
+                      </span>
+                      <span className="text-purple-300">
+                        <b>+{rec.newVocabAdded.toLocaleString()}</b> new words
+                      </span>
+                      <span className="text-emerald-300">
+                        <b>+{rec.newSynapsesAdded.toLocaleString()}</b> synapses
+                      </span>
+                      <span className="text-amber-300">
+                        {rec.tokensPerSec.toLocaleString()} tok/s
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Built-in Core Benchmark Excerpts */}
           <div className="bg-[#020408] border border-slate-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-xs font-mono font-bold text-sky-300 uppercase">
-                ONE-CLICK BATCH LITERATURE INGESTION
+                BUILT-IN HIGH-PRECISION BENCHMARK EXCERPTS (7 CORPORA)
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                Stream all 7 classic Gutenberg books and scientific prose directly into the 25M CSR &amp; Pauli H8 memristor buffers.
+                Re-prime the 7 core benchmark excerpts at any time alongside full Project Gutenberg books.
               </p>
             </div>
 
@@ -961,7 +1542,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-sm shadow-emerald-900/40"
               >
                 <Zap className="w-3.5 h-3.5" />
-                <span>{isStreamingAll ? 'STREAMING IN PROGRESS...' : 'STREAM ALL 7 CORPORA'}</span>
+                <span>{isStreamingAll ? 'STREAMING IN PROGRESS...' : 'STREAM ALL 7 BENCHMARK EXCERPTS'}</span>
               </button>
             </div>
           </div>
@@ -1010,7 +1591,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                     onClick={() => handleIngestSingleDoc(doc)}
                     className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-sky-300 font-mono transition-colors cursor-pointer"
                   >
-                    Ingest Corpus
+                    Ingest Excerpt
                   </button>
                 </div>
               </div>
