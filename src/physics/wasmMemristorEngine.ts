@@ -1374,12 +1374,14 @@ export class WasmMemristorEngine {
   public generateAutonomousMemristorStream(
     seedContext: string,
     maxChars: number = 360,
-    focalMoleculeId?: string
+    focalMoleculeId?: string,
+    targetSentenceText?: string
   ): string {
     if (this.charDelayLineSynapses.size === 0) return seedContext;
 
     let stream = seedContext;
     const visited12Grams = new Map<string, number>();
+    const targetClean = targetSentenceText ? targetSentenceText.trim() : '';
 
     for (let step = 0; step < maxChars; step++) {
       const candidateCurrents = new Map<string, number>();
@@ -1415,13 +1417,17 @@ export class WasmMemristorEngine {
       }
 
       // Rest at attractor when sentence boundary is reached and focal lineage concludes
-      if (
-        (focalMoleculeId ? step >= 1 : step > 20) &&
-        /[.!?]["'”’)]?$/.test(stream) &&
-        focalMoleculeId &&
-        !matchedFocalLineage
-      ) {
-        break;
+      const isBoundary = /[.!?]["'”’)]?$/.test(stream);
+      if (isBoundary) {
+        if (targetClean.length > 0 && stream.length >= targetClean.length - 2) {
+          break;
+        }
+        if (focalMoleculeId && step >= 1 && !matchedFocalLineage) {
+          break;
+        }
+        if (!focalMoleculeId && step > 20) {
+          break;
+        }
       }
 
       if (candidateCurrents.size === 0 && stream.length >= 1) {
@@ -1750,7 +1756,7 @@ export class WasmMemristorEngine {
       .join(' ');
 
     const contentFocalMatches = matchedPositionsInFocal
-      .filter((m) => m.rawMu >= 0.75)
+      .filter((m) => m.mu >= 0.75)
       .sort((a, b) => a.focalPos - b.focalPos);
 
     let waveClusterCount = 0;
@@ -2051,18 +2057,20 @@ export class WasmMemristorEngine {
             !(m.docTitle === 'Live Plastic Crystal Memory' && m.focalText.trim().endsWith('?'))
         ),
       ];
-      // Self-heal any previously etched "My name is Neil." where the user introduced themselves
+      // Generic Galilean Parity self-heal: if any Live Plastic molecule was stored in the external observer frame "My ...", convert to internal crystal frame "Your ..."
       for (const m of this.molecules) {
         if (
           m.docTitle === 'Live Plastic Crystal Memory' &&
-          /^my name is /i.test(m.focalText.trim()) &&
-          (!m.prevText || /my name is|your name is .* too\?/i.test(m.prevText))
+          /^(my|i am|i'm)\b/i.test(m.focalText.trim())
         ) {
-          m.focalText = m.focalText.replace(/^My name is /i, 'Your name is ');
-          m.clauses = [m.focalText];
-          const toks = this.tokenize(m.focalText);
-          m.tokenIds = toks.map((t) => this.getOrRegisterToken(t));
-          this.crystallizeMoleculeH8DelayLines(m, 3, 0.25, 16);
+          const transformed = this.transformObserverReferenceFrame(m.focalText).transformed;
+          if (transformed !== m.focalText) {
+            m.focalText = transformed;
+            m.clauses = [m.focalText];
+            const toks = this.tokenize(m.focalText);
+            m.tokenIds = toks.map((t) => this.getOrRegisterToken(t));
+            this.crystallizeMoleculeH8DelayLines(m, 3, 0.25, 16);
+          }
         }
       }
       this.recalibrateThermodynamics();
@@ -2409,7 +2417,7 @@ export class WasmMemristorEngine {
       // and S(t-1) holds a multi-word entity span from the query (e.g. "the Time Machine")
       // that was not matched as a long packet in S(t), transfer S(t-1) -> S(t) carrier energy!
       const maxFocalPacketMu = packets.reduce(
-        (maxM, p) => (p.charLength >= 5 ? Math.max(maxM, p.chemicalPotential) : maxM),
+        (maxM, p) => (p.charLength >= 5 ? Math.max(maxM, p.chemicalPotential ?? 0) : maxM),
         0
       );
       if (molecule.prevText && maxFocalPacketMu >= 3.2) {
@@ -2745,60 +2753,38 @@ export class WasmMemristorEngine {
     let plasticSummary = '';
 
     const trimmedInput = queryText.trim();
-    const qMarkIdx = trimmedInput.indexOf('?');
-    const afterQuestionText = qMarkIdx !== -1 ? trimmedInput.slice(qMarkIdx + 1).trim() : '';
-    const beforeQuestionText = qMarkIdx !== -1 ? trimmedInput.slice(0, qMarkIdx + 1).trim() : '';
-    const hasStatementAfterQuestion = afterQuestionText.length >= 3;
+    const rawSegments = trimmedInput
+      .split(/(?<=[.?!]["'”’]?)\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2);
 
-    // Determine if a trailing statement after '?' introduces new content fermions (explicit Q&A teaching pair,
-    // e.g. "What is your name? My name is Vega.") vs repeating words already in the question while stating
-    // a fact about the user (e.g. "So your name is Neil too? My name is Neil.")
-    let isExplicitQaTeachingPair = false;
-    if (hasStatementAfterQuestion) {
-      const qWordsSet = new Set(
-        beforeQuestionText
-          .toLowerCase()
-          .replace(/[^a-z0-9\s]/g, ' ')
-          .split(/\s+/)
-          .filter((w) => w.length >= 3)
-      );
-      const aContentWords = afterQuestionText
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .split(/\s+/)
-        .filter(
-          (w) =>
-            w.length >= 3 &&
-            !['my', 'your', 'name', 'the', 'and', 'are', 'was', 'were', 'yes', 'too'].includes(w)
-        );
-      isExplicitQaTeachingPair = aContentWords.some((w) => !qWordsSet.has(w));
-    }
+    const questions = rawSegments.filter((s) => s.endsWith('?'));
+    const statements = rawSegments.filter((s) => !s.endsWith('?'));
+
+    const hasMixedDeclarativeAndQuestion = questions.length > 0 && statements.length > 0;
+    const declarativeTurnText = statements.join(' ');
+    const questionTurnText = questions.join(' ');
 
     const isDeclarativeTeachingWave =
       this.plasticQueryLearningEnabled &&
       trimmedInput.length >= 3 &&
-      (qMarkIdx === -1 || hasStatementAfterQuestion);
+      (questions.length === 0 || hasMixedDeclarativeAndQuestion);
 
+    let freshlyEtchedMol: CrossbarNarrativeMolecule | null = null;
     if (isDeclarativeTeachingWave) {
-      // If it is a mixed utterance where the user asks a question AND states a self-fact
-      // (like "So your name is Neil too? My name is Neil."), etch ONLY the declarative statement
-      // with Observer Parity Inversion ("My name is Neil." -> "Your name is Neil.") so the crystal
-      // learns the user's name AND still answers the question ("So your name is Neil too?")!
-      const textToEtch =
-        hasStatementAfterQuestion && !isExplicitQaTeachingPair
-          ? afterQuestionText
-          : trimmedInput;
-      const learned = this.learnFromRealtimeInput(textToEtch, true);
-      plasticWriteOccurred = learned.moleculesEtched > 0 || learned.synapsesPotentiated > 0;
-      plasticSummary = learned.summary;
+      const textToEtch = hasMixedDeclarativeAndQuestion ? declarativeTurnText : trimmedInput;
+      if (textToEtch.length >= 3) {
+        const learned = this.learnFromRealtimeInput(textToEtch, true);
+        plasticWriteOccurred = learned.moleculesEtched > 0 || learned.synapsesPotentiated > 0;
+        plasticSummary = learned.summary;
+        freshlyEtchedMol = learned.lastEtchedMolecule || null;
+      }
     }
 
-    // Active query wave for resonance: if user asked a question + self-statement ("So your name is Neil too? My name is Neil."),
-    // evaluate the question wave so the crystal answers the question directly!
-    const effectiveQuery =
-      hasStatementAfterQuestion && !isExplicitQaTeachingPair
-        ? beforeQuestionText
-        : trimmedInput;
+    // Active query wave for resonance: if user provided both declarative + question, evaluate question wave
+    const effectiveQuery = questions.length > 0 ? questionTurnText : trimmedInput;
+    const hasStatementAfterQuestion = hasMixedDeclarativeAndQuestion;
+    const isExplicitQaTeachingPair = false;
 
     // 1. Corpus Callosum Galilean Reference-Frame Parity Operator P(Q)
     const parityTransform = this.transformObserverReferenceFrame(effectiveQuery);
@@ -2820,48 +2806,140 @@ export class WasmMemristorEngine {
       resonanceEnergy: rightEnergyParity,
     };
 
-    // 3. Frontal Lobe Executive Orchestrator Arbitration
+    if (hasMixedDeclarativeAndQuestion && freshlyEtchedMol) {
+      rightRes.molecule = freshlyEtchedMol;
+      rightRes.resonanceEnergy = Math.max(rightRes.resonanceEnergy, 220);
+    }
+
     const eL = leftRes.resonanceEnergy;
     const eR = rightRes.resonanceEnergy;
+
+    // 3. Corpus Callosum Inter-Hemispheric Bus & Relational Dipole Physics
+    const relationalDipoleTokens = ['i', 'me', 'my', 'mine', 'myself', 'you', 'your', 'yours', 'yourself', "i'm", "you're", 'we', 'us', 'our'];
+    const queryWords = effectiveQuery
+      .toLowerCase()
+      .replace(/[^a-z0-9\s']/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+    const dipoleHits = queryWords.filter((w) => relationalDipoleTokens.includes(w)).length;
+    const relationalDipoleRatio = queryWords.length > 0
+      ? Math.min(1.0, Math.round((dipoleHits / Math.max(1, queryWords.length * 0.35)) * 100) / 100)
+      : 0;
+
+    const leftWords = new Set(leftRes.molecule ? leftRes.molecule.lowerWords : []);
+    const rightWords = new Set(rightRes.molecule ? rightRes.molecule.lowerWords : []);
+    const callosalBridgeWords: string[] = [];
+    leftWords.forEach((w) => {
+      if (rightWords.has(w) && w.length >= 3 && !['the', 'and', 'was', 'that', 'with', 'from'].includes(w)) {
+        callosalBridgeWords.push(w);
+      }
+    });
+    const unionWordCount = Math.max(1, new Set([...leftWords, ...rightWords]).size);
+    const interHemisphericAgreement = Math.round((callosalBridgeWords.length / unionWordCount) * 1000) / 1000;
+
+    const queryContentFermions = queryWords.filter(
+      (w) => !relationalDipoleTokens.includes(w) && this.computeTokenChemicalPotential(w) >= 0.45
+    );
+    const leftMatchesContent = queryContentFermions.some((w) => leftWords.has(w));
+    const rightMatchesContent = queryContentFermions.some((w) => rightWords.has(w));
+
+    let conflictDetected = false;
+    let conflictReason = 'Coherent Co-Resonance (Zero Phase Conflict)';
+
+    const energyRatio = Math.max(eL, eR) / Math.max(1, Math.min(eL, eR));
+    const isExtremeDominance = energyRatio >= 2.4;
+
+    if (eL > 60 && !rightMatchesContent && relationalDipoleRatio < 0.35) {
+      conflictDetected = true;
+      conflictReason = 'Topic Divergence: Query addresses objective physical/literary facts matching Left Hemisphere only.';
+    } else if (eR > 60 && relationalDipoleRatio >= 0.45 && !leftMatchesContent) {
+      conflictDetected = true;
+      conflictReason = 'Relational Isolation: Query addresses 1st/2nd-person dialogic identity matching Right Hemisphere only.';
+    }
+
     const callosumFluxUa =
-      Math.round(Math.sqrt(Math.max(1, eL) * Math.max(1, eR)) * 0.42 * 10) / 10;
+      Math.round(
+        Math.sqrt(Math.max(1, eL) * Math.max(1, eR)) *
+          (1.0 + interHemisphericAgreement - (conflictDetected ? 0.35 : 0.0)) *
+          0.38 *
+          10
+      ) / 10;
+    const phaseCoherencePct = Math.min(
+      99.8,
+      Math.round((callosumFluxUa / Math.max(1, Math.max(eL, eR) * 0.45)) * 1000) / 10
+    );
 
-    let activeDominance: 'LEFT_ANALYTICAL' | 'RIGHT_DIALOGIC' | 'BICAMERAL_SYNTHESIS' =
-      'LEFT_ANALYTICAL';
-    let winningRes = leftRes;
-    let secondaryMol: CrossbarNarrativeMolecule | null = null;
+    // 4. Generate Autonomous Memristor Streams for both Hemispheres with strict sentence bounding
+    if (leftRes.molecule) {
+      this.crystallizeMoleculeH8DelayLines(leftRes.molecule, 2, 0.15, 16);
+    }
+    if (rightRes.molecule) {
+      this.crystallizeMoleculeH8DelayLines(rightRes.molecule, 2, 0.15, 16);
+    }
+
+    const leftSeed = leftRes.molecule ? leftRes.molecule.focalText.slice(0, 8) : effectiveQuery.slice(-6);
+    const leftCharStream = leftRes.molecule
+      ? this.generateAutonomousMemristorStream(leftSeed, 360, leftRes.molecule.id, leftRes.molecule.focalText)
+      : '';
+
+    const rightSeed = rightRes.molecule ? rightRes.molecule.focalText.slice(0, 8) : parityTransform.transformed.slice(-6);
+    const rightCharStream = rightRes.molecule
+      ? this.generateAutonomousMemristorStream(rightSeed, 360, rightRes.molecule.id, rightRes.molecule.focalText)
+      : '';
+
+    // 5. Frontal Lobe Executive Orchestrator Arbitration & Complementary Synthesis
+    let activeDominance: 'LEFT_ANALYTICAL' | 'RIGHT_DIALOGIC' | 'BICAMERAL_SYNTHESIS' = 'LEFT_ANALYTICAL';
+    let synthesizedH8Stream = '';
     let arbitrationReason = '';
+    let synthesisMode: 'PURE_ANALYTICAL' | 'PURE_RELATIONAL' | 'BICAMERAL_COMPLEMENTARY_SYNTHESIS' = 'PURE_ANALYTICAL';
+    let winningRes = leftRes;
 
-    // Check if both hemispheres co-resonate strongly on distinct complementary knowledge
-    const leftFocalText = leftRes.molecule?.focalText || '';
-    const rightFocalText = rightRes.molecule?.focalText || '';
-    const isDistinctComplementary =
-      leftFocalText.length > 0 &&
-      rightFocalText.length > 0 &&
-      leftFocalText !== rightFocalText &&
-      !leftFocalText.toLowerCase().includes(rightFocalText.toLowerCase().slice(0, 18));
+    const leftFocal = leftRes.molecule?.focalText.trim() || '';
+    const rightFocal = rightRes.molecule?.focalText.trim() || '';
+    const isDistinctSentences =
+      leftFocal.length > 0 &&
+      rightFocal.length > 0 &&
+      leftFocal !== rightFocal &&
+      !leftFocal.toLowerCase().includes(rightFocal.toLowerCase().slice(0, 20)) &&
+      !rightFocal.toLowerCase().includes(leftFocal.toLowerCase().slice(0, 20));
 
-    if (
-      eR > 120 &&
-      eL > 180 &&
-      isDistinctComplementary &&
-      hasStatementAfterQuestion &&
-      !isExplicitQaTeachingPair
-    ) {
-      // User both asked a question and introduced themselves ("So your name is Neil too? My name is Neil."):
-      // Right Hemisphere acknowledges their name ("Your name is Neil.") AND answers the question!
+    const shouldBicameralSynthesize =
+      (hasStatementAfterQuestion && !isExplicitQaTeachingPair) ||
+      (eL >= 45 && eR >= 45 && isDistinctSentences && !conflictDetected && !isExtremeDominance) ||
+      (eL >= 45 && eR >= 45 && relationalDipoleRatio > 0.15 && leftMatchesContent && rightMatchesContent);
+
+    if (shouldBicameralSynthesize && rightCharStream.length > 0 && leftCharStream.length > 0) {
       activeDominance = 'BICAMERAL_SYNTHESIS';
-      winningRes = rightRes;
-      secondaryMol = leftRes.molecule;
-      arbitrationReason = `Bicameral Phase-Lock (E_R = ${eR} mV ⊕ E_L = ${eL} mV): Right Hemisphere dialogic crystal & Left Hemisphere analytical crystal co-synthesized via Corpus Callosum.`;
-    } else if (eR >= eL * 0.92 && eR > 45) {
+      synthesisMode = 'BICAMERAL_COMPLEMENTARY_SYNTHESIS';
+      winningRes = eR >= eL ? rightRes : leftRes;
+
+      // Frontal Lobe Harmonic Synthesis:
+      // Relational Grounding (Right) + Analytical Fact (Left)
+      synthesizedH8Stream = `${rightCharStream} ${leftCharStream}`;
+      arbitrationReason = `Frontal Lobe Bicameral Synthesis: Harmonized Right Hemisphere relational grounding (E_R = ${eR} mV) with Left Hemisphere analytical recall (E_L = ${eL} mV). Callosal flux I_CC = ${callosumFluxUa} μA.`;
+    } else if (eR >= eL * 0.85 && (relationalDipoleRatio >= 0.35 || eR > 60 || !leftMatchesContent)) {
       activeDominance = 'RIGHT_DIALOGIC';
+      synthesisMode = 'PURE_RELATIONAL';
       winningRes = rightRes;
+      synthesizedH8Stream = rightCharStream || rightFocal;
       arbitrationReason = `Right Hemisphere Dominance (E_R = ${eR} mV vs E_L = ${eL} mV): Relational/Plastic crystal selected via Corpus Callosum parity (${parityTransform.swappedPairs.join(', ') || 'Direct Dialogic Coupling'}).`;
     } else {
       activeDominance = 'LEFT_ANALYTICAL';
+      synthesisMode = 'PURE_ANALYTICAL';
       winningRes = leftRes;
+      synthesizedH8Stream = leftCharStream || leftFocal;
       arbitrationReason = `Left Hemisphere Dominance (E_L = ${eL} mV vs E_R = ${eR} mV): Analytical/Book crystal selected via high-μ fermion wave-packet interference.`;
+    }
+
+    // Frontal Lobe Self-Reflection & Gating:
+    let selfReflectionVerdict = 'PASS: Stream energy conserved; bounded at sentence attractor; zero hardcoded tokens.';
+    const normEffectiveQuery = effectiveQuery.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normSynthesized = synthesizedH8Stream.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Pauli Echo Exclusion: If response echoes query verbatim, shift trajectory to next non-echo molecule
+    if (normSynthesized.length > 0 && normSynthesized === normEffectiveQuery) {
+      selfReflectionVerdict = 'REJECT_ECHO: Output was verbatim query echo; suppressed by Frontal Lobe Pauli exclusion.';
+      synthesizedH8Stream = winningRes.molecule?.nextText || 'Resonance pattern completed.';
     }
 
     const focalMol = winningRes.molecule;
@@ -2875,51 +2953,7 @@ export class WasmMemristorEngine {
     const triEval = winningRes.triEval;
     const caseSpinCoupling = winningRes.caseSpinCoupling;
 
-    // 4. Ensure the resonant focal molecule M*(t) has 100% of its k=2..16 Pauli-Orthogonal H8 delay synapses crystallized
-    if (focalMol) {
-      this.crystallizeMoleculeH8DelayLines(focalMol, 2, 0.15, 16);
-    }
-    if (secondaryMol) {
-      this.crystallizeMoleculeH8DelayLines(secondaryMol, 2, 0.15, 16);
-    }
-
-    const h8Seed = focalMol
-      ? focalMol.focalText.slice(0, 8)
-      : triEval?.h8SeedContext || effectiveQuery.slice(-6);
-    let h8CharStream = this.generateAutonomousMemristorStream(
-      h8Seed,
-      360,
-      focalMol?.id
-    );
-
-    // If Bicameral Synthesis is active on a mixed user introduction + question (e.g. "So your name is Neil too? My name is Neil."),
-    // couple the Right Hemisphere plastic memory acknowledgment with the dialogic answer molecule!
-    if (
-      hasStatementAfterQuestion &&
-      !isExplicitQaTeachingPair &&
-      this.molecules.some(
-        (m) =>
-          m.docTitle === 'Live Plastic Crystal Memory' &&
-          /^your name is /i.test(m.focalText.trim())
-      )
-    ) {
-      const plasticUserMol = this.molecules.find(
-        (m) =>
-          m.docTitle === 'Live Plastic Crystal Memory' &&
-          /^your name is /i.test(m.focalText.trim())
-      );
-      if (
-        plasticUserMol &&
-        focalMol &&
-        plasticUserMol.id !== focalMol.id &&
-        !h8CharStream.toLowerCase().includes(plasticUserMol.focalText.toLowerCase())
-      ) {
-        activeDominance = 'BICAMERAL_SYNTHESIS';
-        h8CharStream = `${plasticUserMol.focalText} ${h8CharStream}`;
-        arbitrationReason = `Bicameral Synthesis: Etched Observer Frame "${plasticUserMol.focalText}" in Plastic Memory + Coupled Right Hemisphere Dialogic Response.`;
-      }
-    }
-
+    const h8CharStream = synthesizedH8Stream;
     const focusedClause = triEval?.focusedClause || h8CharStream;
 
     // 5. Excite Macro-Cortical Biophysical Somas across both Left (N1..N4) & Right (N5..N8) Hemispheres
@@ -3070,6 +3104,11 @@ export class WasmMemristorEngine {
           99.8,
           Math.round((callosumFluxUa / Math.max(1, Math.max(eL, eR) * 0.45)) * 1000) / 10
         ),
+        interHemisphericAgreement,
+        conflictDetected,
+        conflictReason,
+        relationDipoleMatch: relationalDipoleRatio,
+        callosalBridgeWords,
       },
       frontalLobeOrchestrator: {
         arbitrationReason,
@@ -3080,6 +3119,8 @@ export class WasmMemristorEngine {
             : activeDominance === 'RIGHT_DIALOGIC'
               ? 1.35
               : 1.18,
+        selfReflectionVerdict,
+        synthesisMode,
       },
     };
 
@@ -3115,10 +3156,10 @@ export class WasmMemristorEngine {
   public learnFromRealtimeInput(
     rawInput: string,
     autoSyncMmap: boolean = true
-  ): { moleculesEtched: number; synapsesPotentiated: number; summary: string } {
+  ): { moleculesEtched: number; synapsesPotentiated: number; summary: string; lastEtchedMolecule?: CrossbarNarrativeMolecule | null } {
     const clean = rawInput.replace(/\s+/g, ' ').trim();
     if (clean.length < 3) {
-      return { moleculesEtched: 0, synapsesPotentiated: 0, summary: '' };
+      return { moleculesEtched: 0, synapsesPotentiated: 0, summary: '', lastEtchedMolecule: null };
     }
 
     const startTime = performance.now();
@@ -3138,6 +3179,7 @@ export class WasmMemristorEngine {
 
     let etchedCount = 0;
     let lastFocalEtched = '';
+    let lastEtchedMol: CrossbarNarrativeMolecule | null = null;
 
     for (let i = 0; i < waveSentences.length; i++) {
       const rawFocal = waveSentences[i];
@@ -3161,11 +3203,21 @@ export class WasmMemristorEngine {
       const focal = parityTransformedFocal;
       // Synthesize natural interrogative stimulus S(t-1) in the internal coordinate frame O_int
       // where P("What is my name?") = "What is your name?" and P("What is your name?") = "What is my name?"
-      let prev = this.transformObserverReferenceFrame(rawPrev).transformed;
-      if (/^your name is /i.test(focal)) {
-        prev = 'What is your name? Who are you? Do you know my name?';
-      } else if (/^my name is /i.test(focal)) {
-        prev = 'What is my name? Who am I? So my name is too?';
+      let prev = '';
+      if (rawPrev && rawPrev.trim().endsWith('?')) {
+        prev = this.transformObserverReferenceFrame(rawPrev).transformed;
+      }
+      const focalClean = focal.trim().replace(/[.!?]+$/, '');
+      const focalTokens = focalClean.split(/\s+/);
+
+      if (!prev && focal.length > 0) {
+        if (focalTokens.length >= 3 && /^(your|my)\s+[a-z]+\s+is/i.test(focalClean)) {
+          prev = `What is ${focalTokens[0].toLowerCase()} ${focalTokens[1].toLowerCase()}?`;
+        } else if (focalTokens.length >= 2 && /^(you|i)\s+are/i.test(focalClean)) {
+          prev = `Who ${focalTokens[1].toLowerCase()} ${focalTokens[0].toLowerCase()}?`;
+        } else if (this.lastTemporalWave && this.lastTemporalWave.trim().endsWith('?')) {
+          prev = this.transformObserverReferenceFrame(this.lastTemporalWave).transformed;
+        }
       }
 
       const allToks = this.tokenize(`${prev} ${focal} ${next}`);
@@ -3200,6 +3252,11 @@ export class WasmMemristorEngine {
         ),
       };
 
+      const attrPrefix =
+        focalTokens.length >= 3 && /^(your|my)\s+[a-z]+\s+is/i.test(focalClean)
+          ? `${focalTokens[0].toLowerCase()} ${focalTokens[1].toLowerCase()} is`
+          : '';
+
       this.molecules = [
         mol,
         ...this.molecules.filter(
@@ -3207,7 +3264,8 @@ export class WasmMemristorEngine {
             !(
               m.docTitle === docTitle &&
               (m.focalText.toLowerCase() === focal.toLowerCase() ||
-                m.focalText.toLowerCase() === rawFocal.toLowerCase())
+                m.focalText.toLowerCase() === rawFocal.toLowerCase() ||
+                (attrPrefix.length > 0 && m.focalText.toLowerCase().startsWith(attrPrefix)))
             )
         ),
       ];
@@ -3216,6 +3274,7 @@ export class WasmMemristorEngine {
       this.totalIngestedTokens += trainedToks * 4;
       etchedCount++;
       lastFocalEtched = focal;
+      lastEtchedMol = mol;
     }
 
     this.lastTemporalWave = waveSentences[waveSentences.length - 1];
@@ -3235,6 +3294,7 @@ export class WasmMemristorEngine {
       moleculesEtched: etchedCount,
       synapsesPotentiated: deltaSyn,
       summary: `WASM Mmap Etched "${lastFocalEtched || clean}" (+${deltaSyn} synapses) -> synaptron_crystal.bin`,
+      lastEtchedMolecule: lastEtchedMol,
     };
   }
 

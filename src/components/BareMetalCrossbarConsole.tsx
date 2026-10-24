@@ -459,29 +459,35 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     const collectedSteps: GenerationStepTelemetry[] = [];
 
     setTimeout(() => {
-      const synthResult = wasmCrossbarEngine.synthesizeResponse(
-        q,
-        maxSynthesisTokens,
-        temperature,
-        (step) => {
-          collectedSteps.push(step);
-          if (step.token) {
-            soundEngine.playParticleChirp(300 + (step.tokenId % 300), 'quantum');
+      try {
+        const synthResult = wasmCrossbarEngine.synthesizeResponse(
+          q,
+          maxSynthesisTokens,
+          temperature,
+          (step) => {
+            collectedSteps.push(step);
+            if (step.token) {
+              soundEngine.playParticleChirp(300 + (step.tokenId % 300), 'quantum');
+            }
           }
-        }
-      );
+        );
 
-      setSynthesisResult(synthResult);
-      setSynthesizedText(synthResult.response);
-      setGenerationSteps(collectedSteps);
-      if (collectedSteps.length > 0) {
-        setLatestStep(collectedSteps[collectedSteps.length - 1]);
+        setSynthesisResult(synthResult);
+        setSynthesizedText(synthResult.response);
+        setGenerationSteps(collectedSteps);
+        if (collectedSteps.length > 0) {
+          setLatestStep(collectedSteps[collectedSteps.length - 1]);
+        }
+        if (synthResult.plasticSummary) {
+          setPlasticFeedbackBanner(synthResult.plasticSummary);
+        }
+      } catch (err) {
+        console.error('Synthesis error:', err);
+        setSynthesizedText('Resonance calculation interrupted.');
+      } finally {
+        setIsSynthesizing(false);
+        setTelemetry(wasmCrossbarEngine.getTelemetry());
       }
-      if (synthResult.plasticSummary) {
-        setPlasticFeedbackBanner(synthResult.plasticSummary);
-      }
-      setIsSynthesizing(false);
-      setTelemetry(wasmCrossbarEngine.getTelemetry());
     }, 30);
   };
 
@@ -1228,9 +1234,22 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                           P(Wave): &ldquo;{synthesisResult.bicameral.corpusCallosum.transformedQueryWave}&rdquo;
                         </div>
                       </div>
-                      <div className="text-[9px] text-purple-300 mt-1 flex justify-between">
-                        <span>Inter-Hemispheric Lock:</span>
-                        <b>{synthesisResult.bicameral.corpusCallosum.phaseCoherencePct}%</b>
+                      <div className="space-y-0.5 mt-1 border-t border-purple-500/20 pt-1">
+                        <div className="text-[9px] text-purple-300 flex justify-between">
+                          <span>Inter-Hemispheric Lock:</span>
+                          <b>{synthesisResult.bicameral.corpusCallosum.phaseCoherencePct}%</b>
+                        </div>
+                        {synthesisResult.bicameral.corpusCallosum.interHemisphericAgreement !== undefined && (
+                          <div className="text-[9px] text-purple-300 flex justify-between">
+                            <span>Fermion Agreement:</span>
+                            <b>{(synthesisResult.bicameral.corpusCallosum.interHemisphericAgreement * 100).toFixed(1)}%</b>
+                          </div>
+                        )}
+                        {synthesisResult.bicameral.corpusCallosum.conflictDetected && (
+                          <div className="text-[8px] text-amber-300/90 truncate" title={synthesisResult.bicameral.corpusCallosum.conflictReason}>
+                            ⚠️ {synthesisResult.bicameral.corpusCallosum.conflictReason}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1258,9 +1277,17 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                     </div>
                   </div>
 
-                  <div className="bg-slate-900/80 border border-slate-800 rounded px-2.5 py-1 text-[10px] font-mono text-slate-300">
-                    <span className="text-amber-300 font-bold">FRONTAL LOBE ARBITRATION: </span>
-                    {synthesisResult.bicameral.frontalLobeOrchestrator.arbitrationReason}
+                  <div className="bg-slate-900/80 border border-slate-800 rounded px-2.5 py-1.5 text-[10px] font-mono text-slate-300 space-y-1">
+                    <div>
+                      <span className="text-amber-300 font-bold">FRONTAL LOBE ARBITRATION: </span>
+                      {synthesisResult.bicameral.frontalLobeOrchestrator.arbitrationReason}
+                    </div>
+                    {synthesisResult.bicameral.frontalLobeOrchestrator.selfReflectionVerdict && (
+                      <div className="text-[9px] text-emerald-400 border-t border-slate-800/60 pt-0.5 flex items-center gap-1">
+                        <span className="text-emerald-500 font-semibold">SELF-REFLECTION:</span>
+                        <span>{synthesisResult.bicameral.frontalLobeOrchestrator.selfReflectionVerdict}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1456,7 +1483,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                         {step.currentUa.toFixed(1)}μA
                       </span>
                       <span className="text-[9px] text-amber-300 tabular-nums">
-                        μ:{step.chemicalPotentialMu.toFixed(2)}
+                        μ:{(step.chemicalPotentialMu ?? 0).toFixed(2)}
                       </span>
                     </div>
                   ))}

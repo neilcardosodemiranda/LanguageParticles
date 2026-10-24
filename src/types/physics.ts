@@ -222,31 +222,50 @@ export interface TriChamberTelemetry {
 export interface BicameralMindTelemetry {
   activeDominance: 'LEFT_ANALYTICAL' | 'RIGHT_DIALOGIC' | 'BICAMERAL_SYNTHESIS';
   leftHemisphere: {
-    energyMv: number;
+    label?: string;
+    resonanceMv: number;
     matchedSentence: string;
-    sourceBook: string;
+    sourceCrystal: string;
     activeSomas: string[];
-    moleculesCount: number;
+    moleculesCount?: number;
+    energyMv?: number;
+    sourceBook?: string;
   };
   rightHemisphere: {
-    energyMv: number;
+    label?: string;
+    resonanceMv: number;
     matchedSentence: string;
-    sourceBook: string;
+    sourceCrystal: string;
     activeSomas: string[];
-    moleculesCount: number;
-    observerFrameTransformation: string;
+    moleculesCount?: number;
+    energyMv?: number;
+    sourceBook?: string;
+    observerFrameTransformation?: string;
   };
   corpusCallosum: {
-    phaseLockCoherence: number;
-    interHemisphericFluxUa: number;
-    relationalDipoleRatio: number;
-    callosalBridgeWords: string[];
+    phaseLockCoherence?: number;
+    interHemisphericFluxUa?: number;
+    relationalDipoleRatio?: number;
+    callosalBridgeWords?: string[];
+    fluxCurrentUa: number;
+    parityTransformation: string;
+    transformedQueryWave: string;
+    phaseCoherencePct: number;
+    interHemisphericAgreement?: number;
+    conflictDetected?: boolean;
+    conflictReason?: string;
+    relationDipoleMatch?: number;
   };
   frontalLobeOrchestrator: {
-    executiveDecision: string;
-    consciousStreamSummary: string;
-    activeTotalCsrSynapsesFired: number;
-    activeH8DelaySynapsesFired: number;
+    executiveDecision?: string;
+    consciousStreamSummary?: string;
+    activeTotalCsrSynapsesFired?: number;
+    activeH8DelaySynapsesFired?: number;
+    arbitrationReason: string;
+    synthesizedStream?: string;
+    executiveGain: number;
+    selfReflectionVerdict?: string;
+    synthesisMode?: 'PURE_ANALYTICAL' | 'PURE_RELATIONAL' | 'BICAMERAL_COMPLEMENTARY_SYNTHESIS';
   };
 }
 
