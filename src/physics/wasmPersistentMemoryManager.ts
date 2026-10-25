@@ -200,9 +200,10 @@ export class WasmPersistentMemoryManager {
    */
   private openIndexedDB(): Promise<IDBDatabase> {
     if (this.idbPromise) return this.idbPromise;
-    this.idbPromise = new Promise((resolve, reject) => {
+    const p = new Promise<IDBDatabase>((resolve, reject) => {
       try {
         if (typeof indexedDB === 'undefined') {
+          this.idbPromise = null;
           return reject(new Error('IndexedDB unavailable'));
         }
         const req = indexedDB.open('synaptron_crystal_mmap_db', 1);
@@ -215,13 +216,15 @@ export class WasmPersistentMemoryManager {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => {
           this.idbPromise = null;
-          reject(req.error);
+          reject(req.error || new Error('IndexedDB open error'));
         };
       } catch (err) {
         this.idbPromise = null;
         reject(err);
       }
     });
+    p.catch(() => {});
+    this.idbPromise = p;
     return this.idbPromise;
   }
 
@@ -344,15 +347,19 @@ export class WasmPersistentMemoryManager {
       [];
 
     const inspectBuffer = (source: string, buf: ArrayBuffer | null) => {
-      if (!buf || buf.byteLength < 64) return;
-      const h = new Uint32Array(buf, 0, 8);
-      if (h[0] === SCB1_MAGIC) {
-        candidates.push({
-          source,
-          buf,
-          vocab: h[3] || 0,
-          synapses: h[4] || 0,
-        });
+      try {
+        if (!buf || buf.byteLength < 64) return;
+        const h = new Uint32Array(buf, 0, 8);
+        if (h[0] === SCB1_MAGIC) {
+          candidates.push({
+            source,
+            buf,
+            vocab: h[3] || 0,
+            synapses: h[4] || 0,
+          });
+        }
+      } catch {
+        // Safe ignore corrupted or unaligned buffers
       }
     };
 

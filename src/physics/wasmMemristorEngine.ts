@@ -3555,6 +3555,11 @@ export class WasmMemristorEngine {
       const vocabArrBytes = headerU32[3] * 4;
       const synArrBytes = headerU32[4] * 4;
 
+      const totalRequiredMin = offset + rowPtrBytes + 5 * vocabArrBytes + 4 * synArrBytes + jsonByteLen;
+      if (buffer.byteLength < totalRequiredMin) {
+        return false;
+      }
+
       this.rowPtr.fill(0);
       this.rowCounts.fill(0);
       this.headEdge.fill(-1);
@@ -3601,19 +3606,24 @@ export class WasmMemristorEngine {
         }
       }
 
-      const jsonSlice = new Uint8Array(buffer, offset, jsonByteLen);
-      const decoder = new TextDecoder();
-      const meta = JSON.parse(decoder.decode(jsonSlice)) as {
-        v: string[];
-        m: Array<[string, number, string, number, string, string, string]>;
-        b: IngestedBookRecord[];
-        wc: Array<[string, number]>;
-        ws: Array<[string, number]>;
-        cf: Array<[string, Array<[string, number]>]>;
-        cb: Array<[string, Array<[string, number]>]>;
+      let meta: {
+        v?: string[];
+        m?: Array<[string, number, string, number, string, string, string]>;
+        b?: IngestedBookRecord[];
+        wc?: Array<[string, number]>;
+        ws?: Array<[string, number]>;
+        cf?: Array<[string, Array<[string, number]>]>;
+        cb?: Array<[string, Array<[string, number]>]>;
         cal?: CorpusCalibrationArtifact;
         lw?: string;
-      };
+      } = {};
+      try {
+        const jsonSlice = new Uint8Array(buffer, offset, jsonByteLen);
+        const decoder = new TextDecoder();
+        meta = JSON.parse(decoder.decode(jsonSlice));
+      } catch {
+        return false;
+      }
 
       this.vocabList = meta.v || [];
       this.lastTemporalWave = meta.lw || '';

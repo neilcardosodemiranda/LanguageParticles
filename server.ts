@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
@@ -484,19 +485,18 @@ async function startServer() {
         filePath: 'data/synaptron_crystal.bin',
       });
     }
-    const headerU32 = new Uint32Array(
-      mappedCrystalBuffer.buffer,
-      mappedCrystalBuffer.byteOffset,
-      16
-    );
+    const vocabRaw = mappedCrystalBuffer.byteLength >= 16 ? mappedCrystalBuffer.readUInt32LE(12) : 3;
+    const activeSynapses = mappedCrystalBuffer.byteLength >= 20 ? mappedCrystalBuffer.readUInt32LE(16) : 0;
+    const ingestedTokens = mappedCrystalBuffer.byteLength >= 24 ? mappedCrystalBuffer.readUInt32LE(20) : 0;
+    const ingestedBooks = mappedCrystalBuffer.byteLength >= 28 ? mappedCrystalBuffer.readUInt32LE(24) : 0;
     return res.json({
       exists: true,
       byteLength: mappedCrystalBuffer.byteLength,
       timestamp: mappedCrystalTimestamp,
-      vocabCount: Math.max(0, (headerU32[3] || 3) - 3),
-      activeSynapses: headerU32[4] || 0,
-      ingestedTokens: headerU32[5] || 0,
-      ingestedBooks: headerU32[6] || 0,
+      vocabCount: Math.max(0, vocabRaw - 3),
+      activeSynapses,
+      ingestedTokens,
+      ingestedBooks,
       filePath: 'data/synaptron_crystal.bin',
     });
   });
@@ -583,12 +583,16 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
+  const httpServer = http.createServer(app);
+
   // Vite middleware for development vs static serving in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: false,
+        hmr: {
+          server: httpServer,
+        },
         watch: null,
       },
       appType: 'spa',
@@ -602,7 +606,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Bare-Metal Crossbar & Project Gutenberg Proxy Server running on http://0.0.0.0:${PORT}`);
   });
 }
