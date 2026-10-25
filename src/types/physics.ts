@@ -219,8 +219,59 @@ export interface TriChamberTelemetry {
   catGateReason: string;
 }
 
+export interface HemisphericProposal {
+  hemisphere: 'left' | 'right';
+  proposalType: 'analytical' | 'relational';
+  candidateTrajectory: string;
+  charStream: string;
+  resonanceEnergyMv: number;
+  groundingScore: number; // [0, 1] based on chemical potential and coherent wave-packet density
+  confidence: number; // [0, 1]
+  provenance: {
+    sourceCrystal: string;
+    docTitle: string;
+    sentenceIndex?: number;
+    moleculeId?: string;
+  };
+  activeSomas: string[];
+  matchedFermions: string[];
+  final_output: null; // STRICT INVARIANT: Evidence subsystem only, NEVER emits final user output
+}
+
+export interface CorpusCallosumReport {
+  interHemisphericAgreement: number; // \kappa_agree [0, 1]
+  topicCompatibility: number; // [0, 1] topic alignment between proposals
+  provenanceCompatibility: number; // [0, 1] compatibility of evidence sources
+  phaseAlignment: number; // [0, 1] phase coherence fraction
+  conflictDetected: boolean;
+  conflictState: string;
+  callosalBridgeWords: string[];
+  relationalDipoleMatch: number;
+  fluxCurrentUa: number;
+  parityTransformation: string;
+  transformedQueryWave: string;
+  final_output: null; // STRICT INVARIANT: Comparison bus only, NEVER emits final user output
+}
+
+export interface FrontalLobeDecision {
+  action: 'SYNTHESIZE' | 'SELECT_LEFT' | 'SELECT_RIGHT' | 'CLARIFY' | 'ABSTAIN';
+  synthesisMode: 'PURE_ANALYTICAL' | 'PURE_RELATIONAL' | 'BICAMERAL_COMPLEMENTARY_SYNTHESIS' | 'CLARIFICATION_REQUEST' | 'SAFE_ABSTENTION';
+  arbitrationReason: string;
+  selfReflectionVerdict: string;
+  confidenceScore: number;
+  groundingScore: number;
+  queryType: 'FACTUAL_ANALYTICAL' | 'RELATIONAL_IDENTITY' | 'COMPOUND_BICAMERAL' | 'AMBIGUOUS_CONFLICT' | 'SUB_THRESHOLD';
+  final_output: string; // STRICT INVARIANT: Frontal lobe is the SOLE owner of conversational emission
+}
+
 export interface BicameralMindTelemetry {
-  activeDominance: 'LEFT_ANALYTICAL' | 'RIGHT_DIALOGIC' | 'BICAMERAL_SYNTHESIS';
+  activeDominance: 'LEFT_ANALYTICAL' | 'RIGHT_DIALOGIC' | 'BICAMERAL_SYNTHESIS' | 'FRONTAL_CLARIFICATION' | 'FRONTAL_ABSTENTION';
+  leftHemisphereProposal: HemisphericProposal;
+  rightHemisphereProposal: HemisphericProposal;
+  corpusCallosumReport: CorpusCallosumReport;
+  frontalLobeDecision: FrontalLobeDecision;
+
+  // Subsystem telemetry views for HUD integration
   leftHemisphere: {
     label?: string;
     resonanceMv: number;
@@ -230,6 +281,9 @@ export interface BicameralMindTelemetry {
     moleculesCount?: number;
     energyMv?: number;
     sourceBook?: string;
+    groundingScore?: number;
+    proposalOnly: true;
+    final_output: null;
   };
   rightHemisphere: {
     label?: string;
@@ -241,6 +295,9 @@ export interface BicameralMindTelemetry {
     energyMv?: number;
     sourceBook?: string;
     observerFrameTransformation?: string;
+    groundingScore?: number;
+    proposalOnly: true;
+    final_output: null;
   };
   corpusCallosum: {
     phaseLockCoherence?: number;
@@ -255,8 +312,13 @@ export interface BicameralMindTelemetry {
     conflictDetected?: boolean;
     conflictReason?: string;
     relationDipoleMatch?: number;
+    topicCompatibility?: number;
+    provenanceCompatibility?: number;
+    proposalOnly: true;
+    final_output: null;
   };
   frontalLobeOrchestrator: {
+    action?: 'SYNTHESIZE' | 'SELECT_LEFT' | 'SELECT_RIGHT' | 'CLARIFY' | 'ABSTAIN';
     executiveDecision?: string;
     consciousStreamSummary?: string;
     activeTotalCsrSynapsesFired?: number;
@@ -265,7 +327,8 @@ export interface BicameralMindTelemetry {
     synthesizedStream?: string;
     executiveGain: number;
     selfReflectionVerdict?: string;
-    synthesisMode?: 'PURE_ANALYTICAL' | 'PURE_RELATIONAL' | 'BICAMERAL_COMPLEMENTARY_SYNTHESIS';
+    synthesisMode?: 'PURE_ANALYTICAL' | 'PURE_RELATIONAL' | 'BICAMERAL_COMPLEMENTARY_SYNTHESIS' | 'CLARIFICATION_REQUEST' | 'SAFE_ABSTENTION';
+    final_output: string;
   };
 }
 

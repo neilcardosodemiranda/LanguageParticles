@@ -201,21 +201,26 @@ export class WasmPersistentMemoryManager {
   private openIndexedDB(): Promise<IDBDatabase> {
     if (this.idbPromise) return this.idbPromise;
     this.idbPromise = new Promise((resolve, reject) => {
-      if (typeof indexedDB === 'undefined') {
-        return reject(new Error('IndexedDB unavailable'));
-      }
-      const req = indexedDB.open('synaptron_crystal_mmap_db', 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains('mmap_bins')) {
-          db.createObjectStore('mmap_bins');
+      try {
+        if (typeof indexedDB === 'undefined') {
+          return reject(new Error('IndexedDB unavailable'));
         }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => {
+        const req = indexedDB.open('synaptron_crystal_mmap_db', 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('mmap_bins')) {
+            db.createObjectStore('mmap_bins');
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => {
+          this.idbPromise = null;
+          reject(req.error);
+        };
+      } catch (err) {
         this.idbPromise = null;
-        reject(req.error);
-      };
+        reject(err);
+      }
     });
     return this.idbPromise;
   }

@@ -1,6 +1,8 @@
 /**
  * Web Audio API Synthesizer for Neuromorphic Particle Collider
  * Generates quantum pings, synaptic axon spikes, relativistic hums, and word fusion resonances.
+ * All Web Audio methods are fully isolated with fail-safe guards to guarantee zero unhandled exceptions
+ * under sandboxed iframe permissions and browser autoplay policies.
  */
 
 class NeuromorphicAudioEngine {
@@ -11,44 +13,60 @@ class NeuromorphicAudioEngine {
   private synchrotronOsc: OscillatorNode | null = null;
   private synchrotronGain: GainNode | null = null;
 
-  private initContext() {
-    if (!this.ctx && typeof window !== 'undefined') {
-      const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtxClass) {
-        this.ctx = new AudioCtxClass();
-        this.masterGain = this.ctx.createGain();
-        this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume, this.ctx.currentTime);
-        this.masterGain.connect(this.ctx.destination);
+  private initContext(): boolean {
+    try {
+      if (!this.ctx && typeof window !== 'undefined') {
+        const AudioCtxClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtxClass) {
+          this.ctx = new AudioCtxClass();
+          this.masterGain = this.ctx.createGain();
+          this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume, this.ctx.currentTime);
+          this.masterGain.connect(this.ctx.destination);
+        }
       }
-    }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
-  }
-
-  public setMuted(muted: boolean) {
-    this.isMuted = muted;
-    if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(muted ? 0 : this.volume, this.ctx.currentTime);
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+      return !!(this.ctx && this.masterGain);
+    } catch {
+      this.ctx = null;
+      this.masterGain = null;
+      return false;
     }
   }
 
-  public setVolume(vol: number) {
-    this.volume = Math.max(0, Math.min(1, vol));
-    if (this.masterGain && this.ctx && !this.isMuted) {
-      this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
+  public setMuted(muted: boolean): void {
+    try {
+      this.isMuted = muted;
+      if (this.masterGain && this.ctx) {
+        this.masterGain.gain.setValueAtTime(muted ? 0 : this.volume, this.ctx.currentTime);
+      }
+    } catch {
+      // Safe no-op
+    }
+  }
+
+  public setVolume(vol: number): void {
+    try {
+      this.volume = Math.max(0, Math.min(1, vol));
+      if (this.masterGain && this.ctx && !this.isMuted) {
+        this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
+      }
+    } catch {
+      // Safe no-op
     }
   }
 
   /**
    * Collision ping based on letter character frequency & mass
    */
-  public playLetterCollision(char: string, velocity: number) {
+  public playLetterCollision(char: string, velocity: number): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -72,19 +90,18 @@ class NeuromorphicAudioEngine {
       osc.start(now);
       osc.stop(now + 0.1);
     } catch {
-      // Audio fallback silent
+      // Silent fallback
     }
   }
 
   /**
    * Neuromorphic LIF Neuron Spike (bio-electrical discharge click)
    */
-  public playNeuronSpike(core: 'alpha' | 'beta' | 'gamma' | 'delta') {
+  public playNeuronSpike(core: 'alpha' | 'beta' | 'gamma' | 'delta'): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -105,21 +122,19 @@ class NeuromorphicAudioEngine {
       osc.start(now);
       osc.stop(now + 0.04);
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 
   /**
    * Word / Hadron synthesis chord (Harmonic lock)
    */
-  public playWordFusion(word: string) {
+  public playWordFusion(word: string): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
-      // Synthesize a major chord (Root, Major 3rd, 5th, Octave)
       const rootFreq = 261.63; // Middle C
       const intervals = [1, 1.25, 1.5, 2.0];
 
@@ -143,21 +158,19 @@ class NeuromorphicAudioEngine {
         osc.stop(now + 0.6);
       });
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 
   /**
    * Antimatter Annihilation Explosion
    */
-  public playAnnihilation() {
+  public playAnnihilation(): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
-      // Sub bass boom
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
@@ -174,24 +187,23 @@ class NeuromorphicAudioEngine {
       osc.start(now);
       osc.stop(now + 0.48);
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 
   /**
    * Continuous Relativistic Synchrotron Hum
    */
-  public updateSynchrotronHum(active: boolean, beamSpeedFraction: number) {
-    if (this.isMuted || !active) {
-      if (this.synchrotronGain && this.ctx) {
-        this.synchrotronGain.gain.setValueAtTime(0.0001, this.ctx.currentTime);
-      }
-      return;
-    }
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
+  public updateSynchrotronHum(active: boolean, beamSpeedFraction: number): void {
     try {
+      if (this.isMuted || !active) {
+        if (this.synchrotronGain && this.ctx) {
+          this.synchrotronGain.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+        }
+        return;
+      }
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
       if (!this.synchrotronOsc) {
         this.synchrotronOsc = this.ctx.createOscillator();
@@ -210,19 +222,18 @@ class NeuromorphicAudioEngine {
         this.synchrotronGain.gain.setTargetAtTime(0.04 * beamSpeedFraction, now, 0.05);
       }
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 
   /**
    * Particle Chirp / Synaptic Spurt
    */
-  public playParticleChirp(freq: number = 440, type: string = 'sine') {
+  public playParticleChirp(freq: number = 440, type: string = 'sine'): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -240,19 +251,18 @@ class NeuromorphicAudioEngine {
       osc.start(now);
       osc.stop(now + 0.08);
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 
   /**
    * Beam pulse burst
    */
-  public playBeamPulse(side: string, velocity: number) {
+  public playBeamPulse(side: string, velocity: number): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
-
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -271,25 +281,25 @@ class NeuromorphicAudioEngine {
       osc.start(now);
       osc.stop(now + 0.15);
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 
   /**
    * Hadron formation harmonic lock
    */
-  public playHadronFormation() {
+  public playHadronFormation(): void {
     this.playWordFusion('LOCK');
   }
 
   /**
    * Reset / Soma Decay Sound (descending pitch collapse)
    */
-  public playSomaDecay() {
+  public playSomaDecay(): void {
     if (this.isMuted) return;
-    this.initContext();
-    if (!this.ctx || !this.masterGain) return;
     try {
+      if (!this.initContext() || !this.ctx || !this.masterGain) return;
+
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -307,7 +317,7 @@ class NeuromorphicAudioEngine {
       osc.start(now);
       osc.stop(now + 0.38);
     } catch {
-      // Silence
+      // Silent fallback
     }
   }
 }

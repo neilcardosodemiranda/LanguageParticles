@@ -121,6 +121,9 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const [plasticLearningOn, setPlasticLearningOn] = useState<boolean>(
     wasmCrossbarEngine.plasticQueryLearningEnabled
   );
+  const [safeAbstentionOn, setSafeAbstentionOn] = useState<boolean>(
+    wasmCrossbarEngine.safeAbstentionEnabled
+  );
   const [plasticFeedbackBanner, setPlasticFeedbackBanner] = useState<string>('');
 
   // Synthesis & Query States
@@ -172,41 +175,64 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   // so 75,000+ learned words and taught facts never reset on page reload!
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      const restored = await wasmCrossbarEngine.restoreFromBinaryMmap();
-      if (!mounted) return;
+    const initStorage = async () => {
+      try {
+        const restored = await wasmCrossbarEngine.restoreFromBinaryMmap();
+        if (!mounted) return;
 
-      if (restored && wasmCrossbarEngine.totalIngestedTokens > 0) {
-        // Ensure core foundational molecules are present if a previous Gutenberg #35 stream overwrote them
-        const hasFoundationalTimeMachine = wasmCrossbarEngine.molecules.some((m) =>
-          m.focalText.includes('made of nickel, parts of ivory, and crystalline quartz')
-        );
-        if (!hasFoundationalTimeMachine) {
+        if (restored && wasmCrossbarEngine.totalIngestedTokens > 0) {
+          // Automatically purge any legacy pre-seeded dialogue molecules that were cached in browser storage
+          const hasLegacyDialogue = wasmCrossbarEngine.molecules.some((m) =>
+            (m.docTitle && m.docTitle.includes('Relational & Bicameral Dialogic')) ||
+            (m.focalText && m.focalText.includes('waiting to learn whatever identity')) ||
+            (m.focalText && m.focalText.includes('born in the physical world of memristor crossbars'))
+          );
+          if (hasLegacyDialogue) {
+            wasmCrossbarEngine.molecules = wasmCrossbarEngine.molecules.filter(
+              (m) =>
+                !(m.docTitle && m.docTitle.includes('Relational & Bicameral Dialogic')) &&
+                !(m.focalText && m.focalText.includes('waiting to learn whatever identity')) &&
+                !(m.focalText && m.focalText.includes('born in the physical world of memristor crossbars'))
+            );
+            await wasmCrossbarEngine.syncToBinaryMmap();
+          }
+
+          // Ensure core foundational molecules are present if a previous Gutenberg #35 stream overwrote them
+          const hasFoundationalTimeMachine = wasmCrossbarEngine.molecules.some((m) =>
+            m.focalText && m.focalText.includes('made of nickel, parts of ivory, and crystalline quartz')
+          );
+          if (!hasFoundationalTimeMachine) {
+            for (const doc of CORPORE_DOCUMENTS) {
+              wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
+            }
+            await wasmCrossbarEngine.syncToBinaryMmap();
+          }
+          if (!mounted) return;
+          setActiveCapacity(wasmCrossbarEngine.preset);
+          setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+          setTelemetry(wasmCrossbarEngine.getTelemetry());
+          setPlasticFeedbackBanner(
+            `Restored persistent SCB1 .bin crystal: ${(wasmCrossbarEngine.vocabList.length - 3).toLocaleString()} words & ${wasmCrossbarEngine.molecules.length.toLocaleString()} narrative molecules mapped in ${wasmCrossbarEngine.mmapLastSyncMs} ms.`
+          );
+          handleExecuteSynthesis(currentQuery, true);
+        } else if (wasmCrossbarEngine.totalIngestedTokens === 0) {
           for (const doc of CORPORE_DOCUMENTS) {
             wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
           }
           await wasmCrossbarEngine.syncToBinaryMmap();
+          if (!mounted) return;
+          setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+          setTelemetry(wasmCrossbarEngine.getTelemetry());
+          handleExecuteSynthesis('What was the Time Machine made of?', true);
+        } else if (!synthesisResult) {
+          handleExecuteSynthesis(currentQuery, true);
         }
-        setActiveCapacity(wasmCrossbarEngine.preset);
-        setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
-        setTelemetry(wasmCrossbarEngine.getTelemetry());
-        setPlasticFeedbackBanner(
-          `Restored persistent SCB1 .bin crystal: ${(wasmCrossbarEngine.vocabList.length - 3).toLocaleString()} words & ${wasmCrossbarEngine.molecules.length.toLocaleString()} narrative molecules mapped in ${wasmCrossbarEngine.mmapLastSyncMs} ms.`
-        );
-        handleExecuteSynthesis(currentQuery);
-      } else if (wasmCrossbarEngine.totalIngestedTokens === 0) {
-        for (const doc of CORPORE_DOCUMENTS) {
-          wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
-        }
-        await wasmCrossbarEngine.syncToBinaryMmap();
-        if (!mounted) return;
-        setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
-        setTelemetry(wasmCrossbarEngine.getTelemetry());
-        handleExecuteSynthesis('What was the Time Machine made of?');
-      } else if (!synthesisResult) {
-        handleExecuteSynthesis(currentQuery);
+      } catch (err) {
+        console.warn('Initial persistent crystal restore warning:', err);
       }
-    })();
+    };
+
+    void initStorage();
     return () => {
       mounted = false;
     };
@@ -437,7 +463,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   };
 
   // Execute Conversational Synthesis with Pauli-Orthogonal H8 Character Stream & 25M CSR Token Telemetry
-  const handleExecuteSynthesis = (queryToRun?: string) => {
+  const handleExecuteSynthesis = (queryToRun?: string, silent: boolean = false) => {
     const q = (queryToRun || currentQuery).trim();
     if (!q) return;
 
@@ -454,7 +480,13 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     setGenerationSteps([]);
     setLatestStep(null);
 
-    soundEngine.playBeamPulse('left', 4.5);
+    if (!silent) {
+      try {
+        soundEngine.playBeamPulse('left', 4.5);
+      } catch {
+        // Safe no-op
+      }
+    }
 
     const collectedSteps: GenerationStepTelemetry[] = [];
 
@@ -466,8 +498,12 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
           temperature,
           (step) => {
             collectedSteps.push(step);
-            if (step.token) {
-              soundEngine.playParticleChirp(300 + (step.tokenId % 300), 'quantum');
+            if (step.token && !silent) {
+              try {
+                soundEngine.playParticleChirp(300 + (step.tokenId % 300), 'quantum');
+              } catch {
+                // Safe no-op
+              }
             }
           }
         );
@@ -514,6 +550,19 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     setPlasticLearningOn(nextState);
     wasmCrossbarEngine.plasticQueryLearningEnabled = nextState;
     setTelemetry(wasmCrossbarEngine.getTelemetry());
+  };
+
+  // Toggle Sub-Threshold Frontal Lobe Safe Abstention Gate
+  const handleToggleSafeAbstention = () => {
+    const nextState = !safeAbstentionOn;
+    setSafeAbstentionOn(nextState);
+    wasmCrossbarEngine.safeAbstentionEnabled = nextState;
+    setTelemetry(wasmCrossbarEngine.getTelemetry());
+    setPlasticFeedbackBanner(
+      nextState
+        ? 'Sub-Threshold Abstention Gate ACTIVATED (Safe Frontal Lobe Abstention for ungrounded queries)'
+        : 'Sub-Threshold Abstention Gate DEACTIVATED (Experimental mode: Raw crossbar percolation allowed)'
+    );
   };
 
   // Export SCB1 .bin Binary Mmap File to user's computer
@@ -623,6 +672,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
 
     const w = canvas.width;
     const h = canvas.height;
+    if (w <= 0 || h <= 0) return;
     ctx.fillStyle = '#04060b';
     ctx.fillRect(0, 0, w, h);
 
@@ -1077,6 +1127,20 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                   >
                     REAL-TIME QUERY PLASTICITY: {plasticLearningOn ? 'ON (AUTO-ETCH & STDP)' : 'OFF'}
                   </button>
+                  <button
+                    onClick={handleToggleSafeAbstention}
+                    className={`px-2 py-0.5 rounded border font-bold cursor-pointer transition-colors flex items-center gap-1 ${
+                      safeAbstentionOn
+                        ? 'bg-amber-950/90 border-amber-500/60 text-amber-300 hover:bg-amber-900/60'
+                        : 'bg-rose-950/90 border-rose-500/60 text-rose-300 hover:bg-rose-900/60'
+                    }`}
+                    title="Toggle Sub-Threshold Frontal Abstention. When OFF, Frontal Lobe bypasses 'Sub-threshold crossbar resonance' and permits spontaneous raw memristor percolation for experiments."
+                  >
+                    <ShieldAlert className="w-3 h-3" />
+                    <span>
+                      SUB-THRESHOLD ABSTENTION: {safeAbstentionOn ? 'GATE ON (SAFE)' : 'GATE OFF (EXPERIMENTAL)'}
+                    </span>
+                  </button>
                   <span className="text-slate-400">
                     Plastic Writes: <b className="text-emerald-300">{telemetry.mmapPlasticWriteCount}</b>
                   </span>
@@ -1134,13 +1198,16 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
               </div>
             )}
 
-            {/* Primary Autonomous Pauli-Orthogonal H8 Memristor Character-by-Character Stream Box */}
+            {/* Primary Frontal Lobe Final Conversational Emission Box */}
             <div className="bg-[#020408] border border-slate-800 rounded-lg p-4 font-mono text-sm space-y-3 relative overflow-hidden">
               <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 border-b border-slate-800/80 pb-2">
                 <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  <span className="text-emerald-300 font-bold uppercase">
-                    AUTONOMOUS PAULI-ORTHOGONAL H8 MEMRISTOR CHARACTER-BY-CHARACTER STREAM (I = G · V · Ψ_PAULI):
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                  <span className="text-amber-300 font-bold uppercase">
+                    FRONTAL LOBE FINAL CONVERSATIONAL EMISSION (ONLY USER-FACING VOICE):
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">
+                    [Pauli-Orthogonal H8 Stream]
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1166,8 +1233,22 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                   </span>
                 </div>
               ) : synthesizedText ? (
-                <div className="bg-slate-950/90 border border-emerald-500/30 rounded p-3 text-emerald-200 leading-relaxed text-base selection:bg-sky-500">
-                  &ldquo;{synthesizedText}&rdquo;
+                <div className="space-y-2">
+                  <div className="bg-slate-950/90 border border-amber-500/30 rounded p-3 text-amber-100 leading-relaxed text-base selection:bg-sky-500">
+                    &ldquo;{synthesizedText}&rdquo;
+                  </div>
+                  {synthesisResult && synthesisResult.bicameral && (
+                    <div className="text-[10px] text-slate-400 flex flex-wrap items-center justify-between gap-2 px-1">
+                      <span className="text-amber-300 font-medium">
+                        Frontal Action: <b>{synthesisResult.bicameral.frontalLobeDecision?.action || synthesisResult.bicameral.activeDominance}</b>
+                        {' · '}
+                        Synthesis Mode: <b>{synthesisResult.bicameral.frontalLobeDecision?.synthesisMode || 'PURE_ANALYTICAL'}</b>
+                      </span>
+                      <span className="text-slate-400 text-[9px]">
+                        Subsystems: Left Proposal <b className="text-slate-300">null</b> · Right Proposal <b className="text-slate-300">null</b> · Frontal <b className="text-emerald-400">final_output</b>
+                      </span>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-slate-500 italic py-2">
@@ -1188,43 +1269,48 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                           ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
                           : synthesisResult.bicameral.activeDominance === 'RIGHT_DIALOGIC'
                             ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
-                            : 'bg-sky-950/90 border-sky-500/50 text-sky-300'
+                            : synthesisResult.bicameral.activeDominance === 'FRONTAL_CLARIFICATION'
+                              ? 'bg-purple-950/90 border-purple-500/50 text-purple-300'
+                              : synthesisResult.bicameral.activeDominance === 'FRONTAL_ABSTENTION'
+                                ? 'bg-red-950/90 border-red-500/50 text-red-300'
+                                : 'bg-sky-950/90 border-sky-500/50 text-sky-300'
                       }`}
                     >
-                      EXECUTIVE DOMINANCE: {synthesisResult.bicameral.activeDominance} (Gain ×
-                      {synthesisResult.bicameral.frontalLobeOrchestrator.executiveGain})
+                      FRONTAL DECISION: {synthesisResult.bicameral.frontalLobeDecision?.action || synthesisResult.bicameral.activeDominance} (Mode: {synthesisResult.bicameral.frontalLobeDecision?.synthesisMode || synthesisResult.bicameral.activeDominance})
                     </span>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] font-mono">
-                    {/* Left Hemisphere: Analytical & Book Crystal */}
+                    {/* Left Hemisphere: Proposal Evidence Subsystem Only */}
                     <div
                       className={`rounded p-2 border ${
-                        synthesisResult.bicameral.activeDominance !== 'RIGHT_DIALOGIC'
+                        synthesisResult.bicameral.activeDominance === 'LEFT_ANALYTICAL' || synthesisResult.bicameral.activeDominance === 'BICAMERAL_SYNTHESIS'
                           ? 'bg-sky-950/30 border-sky-500/50'
                           : 'bg-slate-900/60 border-slate-800'
                       }`}
                     >
                       <div className="flex items-center justify-between text-sky-300 font-bold">
-                        <span>LEFT HEMISPHERE (BOOK)</span>
+                        <span>LEFT PROPOSAL (EVIDENCE ONLY)</span>
                         <span>E_L = {synthesisResult.bicameral.leftHemisphere.resonanceMv} mV</span>
                       </div>
-                      <div className="text-[9px] text-slate-400 mt-0.5 truncate">
-                        Crystal: {synthesisResult.bicameral.leftHemisphere.sourceCrystal}
+                      <div className="text-[9px] text-slate-400 mt-0.5 flex justify-between">
+                        <span className="truncate">Crystal: {synthesisResult.bicameral.leftHemisphere.sourceCrystal}</span>
+                        <span className="text-sky-400">G_L: {synthesisResult.bicameral.leftHemisphere.groundingScore ?? 0}</span>
                       </div>
                       <div className="text-[9px] text-sky-200/90 mt-1 line-clamp-2">
                         &ldquo;{synthesisResult.bicameral.leftHemisphere.matchedSentence}&rdquo;
                       </div>
-                      <div className="text-[9px] text-sky-400 mt-1">
-                        Somas: {synthesisResult.bicameral.leftHemisphere.activeSomas.map((s) => s.split('-')[0]).join(' → ')}
+                      <div className="text-[8px] text-sky-500/90 mt-1 flex justify-between">
+                        <span>Somas: {(synthesisResult.bicameral.leftHemisphere.activeSomas || []).map((s) => s.split('-')[0]).join(' → ')}</span>
+                        <span className="text-amber-400 font-bold">final_output: null</span>
                       </div>
                     </div>
 
-                    {/* Corpus Callosum Commissure Bus */}
+                    {/* Corpus Callosum Commissure Bus & Inter-Hemispheric Report */}
                     <div className="rounded p-2 border bg-purple-950/25 border-purple-500/40 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between text-purple-300 font-bold">
-                          <span>CORPUS CALLOSUM BUS</span>
+                          <span>CORPUS CALLOSUM REPORT</span>
                           <span>I_CC = {synthesisResult.bicameral.corpusCallosum.fluxCurrentUa} μA</span>
                         </div>
                         <div className="text-[9px] text-amber-300 mt-1 truncate">
@@ -1236,7 +1322,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                       </div>
                       <div className="space-y-0.5 mt-1 border-t border-purple-500/20 pt-1">
                         <div className="text-[9px] text-purple-300 flex justify-between">
-                          <span>Inter-Hemispheric Lock:</span>
+                          <span>Phase Coherence:</span>
                           <b>{synthesisResult.bicameral.corpusCallosum.phaseCoherencePct}%</b>
                         </div>
                         {synthesisResult.bicameral.corpusCallosum.interHemisphericAgreement !== undefined && (
@@ -1250,36 +1336,49 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                             ⚠️ {synthesisResult.bicameral.corpusCallosum.conflictReason}
                           </div>
                         )}
+                        <div className="text-[8px] text-amber-400 font-bold text-right pt-0.5">
+                          final_output: null
+                        </div>
                       </div>
                     </div>
 
-                    {/* Right Hemisphere: Dialogic & Live Plastic Experiential Crystal */}
+                    {/* Right Hemisphere: Proposal Evidence Subsystem Only */}
                     <div
                       className={`rounded p-2 border ${
-                        synthesisResult.bicameral.activeDominance !== 'LEFT_ANALYTICAL'
+                        synthesisResult.bicameral.activeDominance === 'RIGHT_DIALOGIC' || synthesisResult.bicameral.activeDominance === 'BICAMERAL_SYNTHESIS'
                           ? 'bg-emerald-950/30 border-emerald-500/50'
                           : 'bg-slate-900/60 border-slate-800'
                       }`}
                     >
                       <div className="flex items-center justify-between text-emerald-300 font-bold">
-                        <span>RIGHT HEMISPHERE (PLASTIC)</span>
+                        <span>RIGHT PROPOSAL (EVIDENCE ONLY)</span>
                         <span>E_R = {synthesisResult.bicameral.rightHemisphere.resonanceMv} mV</span>
                       </div>
-                      <div className="text-[9px] text-slate-400 mt-0.5 truncate">
-                        Crystal: {synthesisResult.bicameral.rightHemisphere.sourceCrystal}
+                      <div className="text-[9px] text-slate-400 mt-0.5 flex justify-between">
+                        <span className="truncate">Crystal: {synthesisResult.bicameral.rightHemisphere.sourceCrystal}</span>
+                        <span className="text-emerald-400">G_R: {synthesisResult.bicameral.rightHemisphere.groundingScore ?? 0}</span>
                       </div>
                       <div className="text-[9px] text-emerald-200/90 mt-1 line-clamp-2">
                         &ldquo;{synthesisResult.bicameral.rightHemisphere.matchedSentence}&rdquo;
                       </div>
-                      <div className="text-[9px] text-emerald-400 mt-1">
-                        Somas: {synthesisResult.bicameral.rightHemisphere.activeSomas.map((s) => s.split('-')[0]).join(' → ')}
+                      <div className="text-[8px] text-emerald-500/90 mt-1 flex justify-between">
+                        <span>Somas: {(synthesisResult.bicameral.rightHemisphere.activeSomas || []).map((s) => s.split('-')[0]).join(' → ')}</span>
+                        <span className="text-amber-400 font-bold">final_output: null</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="bg-slate-900/80 border border-slate-800 rounded px-2.5 py-1.5 text-[10px] font-mono text-slate-300 space-y-1">
-                    <div>
-                      <span className="text-amber-300 font-bold">FRONTAL LOBE ARBITRATION: </span>
+                  {/* Frontal Lobe Executive Decision & Sole Voice Card */}
+                  <div className="bg-slate-900/90 border border-amber-500/30 rounded px-2.5 py-1.5 text-[10px] font-mono text-slate-300 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-amber-300 font-bold">
+                        FRONTAL LOBE ARBITRATION (SOLE CONVERSATIONAL EMITTER · final_output != null):
+                      </span>
+                      <span className="text-emerald-400 text-[9px]">
+                        Confidence: {(synthesisResult.bicameral.frontalLobeDecision?.confidenceScore ?? 0.85) * 100}% · Grounding: {(synthesisResult.bicameral.frontalLobeDecision?.groundingScore ?? 0.9) * 100}%
+                      </span>
+                    </div>
+                    <div className="text-slate-300">
                       {synthesisResult.bicameral.frontalLobeOrchestrator.arbitrationReason}
                     </div>
                     {synthesisResult.bicameral.frontalLobeOrchestrator.selfReflectionVerdict && (

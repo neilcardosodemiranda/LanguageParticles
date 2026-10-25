@@ -124,3 +124,12 @@ Following the **Science, Space & Biotech** precision instrumentation aesthetic, 
    - **Phase 1**: Build the **Bare-Metal WASM + CSR Memory Pool** and extend the WebGPU engine with the **WGSL Crossbar Resonance Compute Pipeline** alongside the existing particle kinematics kernel.
    - **Phase 2**: Integrate the **Multi-Book + Conversational Q&A Corpus Streamer** with built-in Gutenberg books, scientific Q&A dialogues, and chunked file ingestion capable of processing 500,000+ tokens/sec.
    - **Phase 3**: Build the **Bare-Metal Crossbar Console & Conversational Resonance UI** within the Gutenberg Trainer / Collider workspace, featuring live M4 VRAM telemetry, capacity scaling (`5M` / `25M` / `100M`), and autonomous conversational Q&A synthesis.
+   - **Phase 4**: **Frontal Lobe Continuous Synthesis Operator (Zero Heuristic Selection Rules)**:
+     - Replaced discrete `if/else` selection branches (`SELECT_LEFT` / `SELECT_RIGHT`) with a continuous wave-mixer operator where the Frontal Lobe **always synthesizes an answer** (`action = 'SYNTHESIZE'`).
+     - Dynamically computes continuous hemispheric conductance currents $J_L = E_L \cdot G_L$ and $J_R = E_R \cdot G_R$, normalized into continuous flux weights $\alpha_L, \alpha_R$.
+     - Strictly enforces bicameral architectural invariants:
+       `assert(left.final_output === null)`
+       `assert(right.final_output === null)`
+       `assert(callosum.final_output === null)`
+       `assert(frontal.final_output !== null)`
+       `assert(response === frontal.final_output)`

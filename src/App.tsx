@@ -62,7 +62,9 @@ export default function App() {
 
   // Initial setup: initialize WebGPU accelerator and prime engine with Alice in Wonderland
   useEffect(() => {
-    gpuAccelerator.init();
+    void gpuAccelerator.init().catch((err) => {
+      console.warn('WebGPU accelerator initialization error:', err);
+    });
 
     const aliceBook = SAMPLE_GUTENBERG_BOOKS[0];
     if (aliceBook) {
