@@ -23,6 +23,8 @@ import {
   HemisphericProposal,
   CorpusCallosumReport,
   FrontalLobeDecision,
+  WorkingMemoryTrace,
+  WorkingMemoryState,
 } from '../types/physics';
 import { WasmPersistentMemoryManager } from './wasmPersistentMemoryManager';
 import { CORPORE_DOCUMENTS } from '../data/dialogueCorpus';
@@ -116,6 +118,10 @@ export interface CrossbarTelemetry {
   plasticQueryLearningEnabled: boolean;
   safeAbstentionEnabled: boolean;
   wasmPagesAllocated: number;
+  workingMemoryTracesCount: number;
+  workingMemoryAwakeHours: number;
+  isSleeping: boolean;
+  sleepCycleCount: number;
 }
 
 export interface GenerationStepTelemetry {
@@ -128,10 +134,23 @@ export interface GenerationStepTelemetry {
   candidates: Array<{ token: string; currentUa: number; conductance: number; psi: number }>;
 }
 
+export interface SynapticPercolationHop {
+  hopNumber: number;
+  stage: 'DIRECT_ANCHOR' | 'SYNAPTIC_PERCOLATION' | 'ATTRACTOR_CONVERGENCE';
+  sourceConcept: string;
+  targetDocTitle: string;
+  targetAuthor?: string;
+  targetFocalText: string;
+  transferConductanceUa: number;
+  hopResonanceMv: number;
+  bridgeTokens: string[];
+}
+
 export interface CrossbarNarrativeMolecule {
   id: string;
   lineageId: number;
   docTitle: string;
+  docAuthor?: string;
   sentenceIndex: number;
   prevText: string;
   focalText: string;
@@ -139,6 +158,7 @@ export interface CrossbarNarrativeMolecule {
   clauses: string[];
   tokenIds: number[];
   lowerWords: string[];
+  authorWords?: string[];
 }
 
 export interface CrossbarSynthesisResult {
@@ -164,6 +184,8 @@ export interface CrossbarSynthesisResult {
   activeSomasCount: number;
   plasticWriteOccurred?: boolean;
   plasticSummary?: string;
+  percolationPath?: SynapticPercolationHop[];
+  multiHopEngaged?: boolean;
 }
 
 export class WasmMemristorEngine {
@@ -293,6 +315,19 @@ export class WasmMemristorEngine {
   private mmapSyncTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTemporalWave = '';
 
+  // 24-Hour Episodic Working Memory Buffer & Sleep-Consolidation Substrate
+  public workingMemoryState: WorkingMemoryState = {
+    isActive: true,
+    awakeStartTime: Date.now(),
+    awakeDurationHours: 24,
+    traces: [],
+    totalTracesToday: 0,
+    lastSleepTimestamp: null,
+    sleepCycleCount: 0,
+    isSleeping: false,
+    consolidationProgress: 0,
+  };
+
   constructor(preset: MemoryCapacityPreset = '25M') {
     this.preset = preset;
     this.config = MEMORY_PRESETS[preset];
@@ -326,6 +361,211 @@ export class WasmMemristorEngine {
     this.horizonDelayWavefront.fill(0);
 
     this.seedFundamentalTokens();
+    this.loadWorkingMemoryFromStorage();
+  }
+
+  /**
+   * Loads the 24-hour working memory buffer from localStorage.
+   */
+  public loadWorkingMemoryFromStorage(): void {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+      const raw = localStorage.getItem('synaptron_working_memory_24h');
+      if (!raw) {
+        this.addWorkingMemoryTrace(
+          'Internal monologue online: Frontal Lobe executive working memory initialized for 24h continuous cycle.',
+          'monologue',
+          0.7,
+          25,
+          'frontal'
+        );
+        return;
+      }
+      const data = JSON.parse(raw);
+      if (data && Array.isArray(data.traces)) {
+        this.workingMemoryState = {
+          ...this.workingMemoryState,
+          ...data,
+          traces: data.traces,
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to load working memory from storage:', e);
+    }
+  }
+
+  /**
+   * Persists the active 24-hour working memory buffer to localStorage.
+   */
+  public saveWorkingMemoryToStorage(): void {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+      localStorage.setItem(
+        'synaptron_working_memory_24h',
+        JSON.stringify({
+          awakeStartTime: this.workingMemoryState.awakeStartTime,
+          awakeDurationHours: this.workingMemoryState.awakeDurationHours,
+          traces: this.workingMemoryState.traces.slice(-300),
+          totalTracesToday: this.workingMemoryState.totalTracesToday,
+          lastSleepTimestamp: this.workingMemoryState.lastSleepTimestamp,
+          sleepCycleCount: this.workingMemoryState.sleepCycleCount,
+          lastConsolidationReport: this.workingMemoryState.lastConsolidationReport,
+        })
+      );
+    } catch (e) {
+      console.warn('Failed to save working memory to storage:', e);
+    }
+  }
+
+  /**
+   * Adds an episodic thought, dialogue turn, or internal monologue insight into the 24-hour working memory buffer.
+   */
+  public addWorkingMemoryTrace(
+    text: string,
+    role: 'user' | 'system' | 'monologue' | 'insight',
+    salience: number = 0.5,
+    resonanceMv: number = 12,
+    sourceHemisphere?: 'left' | 'right' | 'frontal'
+  ): WorkingMemoryTrace {
+    const clean = text.trim();
+    const now = Date.now();
+    const trace: WorkingMemoryTrace = {
+      id: `wm-${now}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: now,
+      timeStr: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      text: clean,
+      role,
+      salience: Math.max(0.1, Math.min(1.0, salience)),
+      sourceHemisphere: sourceHemisphere || 'frontal',
+      associatedTokens: this.tokenize(clean).slice(0, 8),
+      resonanceMv: Math.round(resonanceMv * 10) / 10,
+      consolidated: false,
+    };
+
+    this.workingMemoryState.traces.push(trace);
+    this.workingMemoryState.totalTracesToday++;
+    if (this.workingMemoryState.traces.length > 500) {
+      this.workingMemoryState.traces.shift();
+    }
+    this.saveWorkingMemoryToStorage();
+    return trace;
+  }
+
+  /**
+   * Returns current elapsed uptime of the active 24-hour waking period.
+   */
+  public getWorkingMemoryUptime(): {
+    elapsedMs: number;
+    hours: number;
+    minutes: number;
+    seconds: number;
+    percentOf24h: number;
+    isOverdueForSleep: boolean;
+  } {
+    const elapsedMs = Math.max(0, Date.now() - this.workingMemoryState.awakeStartTime);
+    const totalSec = Math.floor(elapsedMs / 1000);
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    const maxMs = (this.workingMemoryState.awakeDurationHours || 24) * 3600 * 1000;
+    const percentOf24h = Math.min(100, Math.round((elapsedMs / maxMs) * 1000) / 10);
+    const isOverdueForSleep = elapsedMs >= maxMs;
+
+    return {
+      elapsedMs,
+      hours,
+      minutes,
+      seconds,
+      percentOf24h,
+      isOverdueForSleep,
+    };
+  }
+
+  /**
+   * Executes the Sleep & Settle Consolidation Cycle:
+   * 1. Replays and crystallizes active working memory traces into permanent synaptic memristor conductances.
+   * 2. Reinforces high-salience concepts and narrative pairs into the crossbar (Left + Right).
+   * 3. Settles down dynamic membrane potentials and soma voltages (rest potential).
+   * 4. Clears the short-term working memory buffer, resetting the waking cycle for the new day.
+   */
+  public async triggerSleepAndConsolidate(): Promise<{
+    tracesProcessed: number;
+    synapsesPotentiated: number;
+    moleculesEtched: number;
+    summary: string;
+  }> {
+    this.workingMemoryState.isSleeping = true;
+    this.workingMemoryState.consolidationProgress = 10;
+
+    const startSyn = this.activeSynapses + this.charDelayEdgeCount;
+    const unconsolidatedTraces = this.workingMemoryState.traces.filter((t) => !t.consolidated);
+    let moleculesEtchedCount = 0;
+
+    // Phase 1: Replay and group working memory into narrative molecules
+    const cycleNum = this.workingMemoryState.sleepCycleCount + 1;
+    const docTitle = `Consolidated Synaptic Crystal (Cycle #${cycleNum})`;
+
+    for (let i = 0; i < unconsolidatedTraces.length; i++) {
+      const trace = unconsolidatedTraces[i];
+      if (trace.text.length >= 6) {
+        // Etch into permanent narrative molecules
+        const molResult = this.learnFromRealtimeInput(trace.text, false);
+        moleculesEtchedCount += molResult.moleculesEtched;
+        trace.consolidated = true;
+      }
+      this.workingMemoryState.consolidationProgress = Math.min(
+        75,
+        10 + Math.round(((i + 1) / Math.max(1, unconsolidatedTraces.length)) * 65)
+      );
+    }
+
+    // Phase 2: Settle membrane potentials to baseline rest (-70mV)
+    this.resetSomaPotentials();
+
+    // Phase 3: Recalibrate thermodynamics & rebuild CSR
+    this.rebuildContiguousCSR();
+    this.recalibrateThermodynamics(performance.now());
+    await this.syncToBinaryMmap();
+
+    const endSyn = this.activeSynapses + this.charDelayEdgeCount;
+    const deltaSyn = Math.max(1, endSyn - startSyn);
+
+    this.workingMemoryState.consolidationProgress = 100;
+    this.workingMemoryState.sleepCycleCount++;
+    this.workingMemoryState.lastSleepTimestamp = Date.now();
+    this.workingMemoryState.awakeStartTime = Date.now();
+    this.workingMemoryState.isSleeping = false;
+
+    // Settle working memory buffer: clear short-term traces but keep an awakening trace
+    const tracesProcessed = unconsolidatedTraces.length;
+    this.workingMemoryState.traces = [];
+    this.addWorkingMemoryTrace(
+      `System awakened from Sleep Cycle #${cycleNum}: Consolidated ${tracesProcessed} working memory traces (+${deltaSyn} synaptic weights etched). Working memory cleared for fresh 24h cycle.`,
+      'insight',
+      1.0,
+      35,
+      'frontal'
+    );
+
+    const summary = `Sleep Consolidation #${cycleNum} Complete: Settled ${tracesProcessed} traces, etched ${moleculesEtchedCount} permanent molecules, potentiated +${deltaSyn} memristor synapses. Working memory settled and refreshed for the next 24h.`;
+
+    this.workingMemoryState.lastConsolidationReport = {
+      timestamp: Date.now(),
+      tracesProcessed,
+      synapsesPotentiated: deltaSyn,
+      moleculesEtched: moleculesEtchedCount,
+      settledAt: new Date().toLocaleTimeString(),
+      summary,
+    };
+
+    this.saveWorkingMemoryToStorage();
+
+    return {
+      tracesProcessed,
+      synapsesPotentiated: deltaSyn,
+      moleculesEtched: moleculesEtchedCount,
+      summary,
+    };
   }
 
   private seedFundamentalTokens(): void {
@@ -550,10 +790,38 @@ export class WasmMemristorEngine {
   /**
    * Segments a raw document into Ordered Three-Sentence Narrative Molecules M(t) = [S(t-1), S(t), S(t+1)].
    */
-  private extractNarrativeMolecules(text: string, title: string): CrossbarNarrativeMolecule[] {
+  private extractNarrativeMolecules(
+    text: string,
+    title: string,
+    author?: string
+  ): CrossbarNarrativeMolecule[] {
     const clean = text.replace(/\r\n/g, '\n').trim();
     const extracted: CrossbarNarrativeMolecule[] = [];
     const isRightDialogicDoc = title.startsWith('Right Hemisphere:');
+
+    const authorWords = author
+      ? Array.from(
+          new Set(
+            author
+              .toLowerCase()
+              .replace(/[^a-z0-9'-]/g, ' ')
+              .split(/\s+/)
+              .filter((w) => w.length >= 2)
+          )
+        )
+      : [];
+
+    const isTableOfContentsOrIndex = (s: string): boolean => {
+      if (/\bCONTENTS\b/i.test(s)) return true;
+      const markers = s.match(/\b(?:chapter|letter|volume|part|book)\s+(?:\d+|[ivxlcdm]+)\b/gi) || [];
+      if (markers.length >= 2) return true;
+      const words = s.toLowerCase().split(/\s+/).filter((w) => w.length > 0);
+      const structWords = words.filter((w) =>
+        /^(?:chapter|letter|volume|part|book|contents|page|pages|\d+|[ivxlcdm]+)$/.test(w)
+      );
+      if (words.length > 3 && structWords.length / words.length > 0.35) return true;
+      return false;
+    };
 
     const sentences = clean
       .split(/(?<=[.?!]["'”’]?)\s+/)
@@ -564,6 +832,12 @@ export class WasmMemristorEngine {
 
     for (let i = 0; i < sentences.length; i++) {
       const focal = sentences[i];
+      if (!isRightDialogicDoc && isTableOfContentsOrIndex(focal)) {
+        continue;
+      }
+      if (!isRightDialogicDoc && focal.length < 15) {
+        continue;
+      }
       if (isRightDialogicDoc && focal.endsWith('?')) {
         pendingQuestionStimuli.push(focal);
         continue;
@@ -591,23 +865,28 @@ export class WasmMemristorEngine {
         .map((c) => c.trim())
         .filter((c) => c.length > 4);
 
+      const moleculeLowerWords = Array.from(
+        new Set([
+          ...contextToks
+            .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+            .filter((w) => w.length >= 2),
+          ...authorWords,
+        ])
+      );
+
       extracted.push({
         id: molId,
         lineageId,
         docTitle: title,
+        docAuthor: author,
         sentenceIndex: i,
         prevText: prev,
         focalText: focal,
         nextText: next,
         clauses: clauses.length > 0 ? clauses : [focal],
         tokenIds,
-        lowerWords: Array.from(
-          new Set(
-            contextToks
-              .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
-              .filter((w) => w.length >= 2)
-          )
-        ),
+        lowerWords: moleculeLowerWords,
+        authorWords,
       });
     }
 
@@ -637,7 +916,13 @@ export class WasmMemristorEngine {
       endIdx = endHit.index;
     }
 
-    const stripped = normalized.slice(startIdx, endIdx).trim();
+    let stripped = normalized.slice(startIdx, endIdx).trim();
+    stripped = stripped
+      .replace(
+        /\bCONTENTS\b[\s\S]*?(?=(?:Letter\s+\d+|Chapter\s+\d+|Preface|Introduction|Book\s+(?:\d+|[IVXLCDM]+))\b)/i,
+        ''
+      )
+      .trim();
     return stripped.length > 100 ? stripped : normalized.trim();
   }
 
@@ -858,7 +1143,7 @@ export class WasmMemristorEngine {
     const vocabBefore = Math.max(0, this.vocabList.length - 3);
     const startSynapses = this.activeSynapses + this.charDelayEdgeCount;
 
-    const newMols = this.extractNarrativeMolecules(cleanText, title);
+    const newMols = this.extractNarrativeMolecules(cleanText, title, author);
     if (newMols.length === 0) {
       return { tokensProcessed: 0, newSynapses: 0, durationMs: 0 };
     }
@@ -949,7 +1234,7 @@ export class WasmMemristorEngine {
     const streamDocTitle = gutenbergId
       ? `${title} (Gutenberg #${gutenbergId})`
       : `${title} (Full Stream)`;
-    const newMols = this.extractNarrativeMolecules(cleanText, streamDocTitle);
+    const newMols = this.extractNarrativeMolecules(cleanText, streamDocTitle, author);
     const extractMs = performance.now() - extractStart;
 
     if (newMols.length === 0) {
@@ -1900,6 +2185,9 @@ export class WasmMemristorEngine {
       punctuationBosons: number;
       spaceGluons: number;
     };
+    percolationPath?: SynapticPercolationHop[];
+    multiHopEngaged?: boolean;
+    hop1Molecule?: CrossbarNarrativeMolecule | null;
   } {
     const rawQuery = queryText.replace(/\s+/g, ' ').trim();
     let uppercaseHits = 0;
@@ -1939,7 +2227,7 @@ export class WasmMemristorEngine {
     if (!hasFrontTimeMachine && (this.molecules.length === 0 || this.wordTransitions.size === 0)) {
       const missingCoreMols: CrossbarNarrativeMolecule[] = [];
       for (const doc of CORPORE_DOCUMENTS) {
-        const docMols = this.extractNarrativeMolecules(doc.content, doc.title);
+        const docMols = this.extractNarrativeMolecules(doc.content, doc.title, doc.author);
         for (const dm of docMols) {
           this.crystallizeMoleculeH8DelayLines(dm, 2, 0.18, 16);
           missingCoreMols.push(dm);
@@ -1970,6 +2258,7 @@ export class WasmMemristorEngine {
       .filter((w) => w.length >= 2);
 
     const normQueryClean = rawQuery.trim().toLowerCase().replace(/[?.!]+$/, '').trim();
+    const queryFermions = queryTokensUpper.map((t) => t.toLowerCase());
     const sourcePool =
       hemisphereFilter === 'all'
         ? this.molecules
@@ -1997,6 +2286,7 @@ export class WasmMemristorEngine {
               : this.computeTokenChemicalPotential(w),
         }));
 
+      const contentFermions = qWords.filter((qw) => qw.mu >= 0.45 && qw.word.length >= 3);
       const scoredCandidates: Array<{ mol: CrossbarNarrativeMolecule; preScore: number }> = [];
       for (let i = 0; i < sourcePool.length; i++) {
         const m = sourcePool[i];
@@ -2020,6 +2310,36 @@ export class WasmMemristorEngine {
               break;
             }
           }
+        }
+
+        // Author Somatic Field Coupling: If query mentions author (e.g. "Albert Einstein", "Isaac Newton")
+        if (m.authorWords && m.authorWords.length > 0) {
+          for (const aw of m.authorWords) {
+            for (const qw of qWords) {
+              if (aw === qw.word) {
+                preScore += qw.mu * 4.8;
+                if (qw.mu >= 0.45) matchedWordsCount++;
+                break;
+              }
+            }
+          }
+        }
+
+        // Strict Biparticle Coincidence Gate:
+        // If query has 2+ distinct content fermions (e.g. "Albert" + "Einstein"),
+        // reject false-coincidence collisions where only 1 particle hits and the rest are absent
+        let fermionsMatchedInDoc = 0;
+        for (const cf of contentFermions) {
+          const inMolecule = m.lowerWords.includes(cf.word);
+          const inAuthor = m.authorWords ? m.authorWords.includes(cf.word) : false;
+          if (inMolecule || inAuthor) {
+            fermionsMatchedInDoc++;
+          }
+        }
+        if (contentFermions.length >= 2 && fermionsMatchedInDoc === 1 && matchedWordsCount <= 1) {
+          preScore *= 0.15; // False Coincidence Penalty
+        } else if (contentFermions.length >= 2 && fermionsMatchedInDoc >= contentFermions.length) {
+          preScore *= 2.4; // Multi-fermion Coherent Coincidence Boost
         }
 
         // Non-linear multi-particle cluster synergy so sentences matching multiple content words
@@ -2066,6 +2386,36 @@ export class WasmMemristorEngine {
       const packets: CharWavePacket[] = [];
       const packetIntervals: Array<{ start: number; end: number; mu: number; len: number }> = [];
       let totalSentenceEnergyMv = 0;
+
+      // Author and Document Somatic Carrier Field Coupling
+      let authorCoherenceBoost = 0;
+      if (molecule.authorWords && molecule.authorWords.length > 0) {
+        let matchedAuthorTokens = 0;
+        for (const aw of molecule.authorWords) {
+          if (normQueryClean.includes(aw)) {
+            matchedAuthorTokens++;
+          }
+        }
+        if (matchedAuthorTokens > 0) {
+          authorCoherenceBoost = matchedAuthorTokens * 160.0;
+          if (matchedAuthorTokens >= molecule.authorWords.length) {
+            authorCoherenceBoost += 180.0; // Full author identity lock!
+          }
+          if (molecule.docAuthor) {
+            packets.push({
+              fragment: molecule.docAuthor,
+              charLength: molecule.docAuthor.length,
+              spinState: 'Author Somatic Field Anchor',
+              energyMv: Math.round(authorCoherenceBoost * 10) / 10,
+              conductanceSiemens: 24.5,
+              forwardEntropyBits: 1.25,
+              backwardEntropyBits: 0.85,
+              chemicalPotential: 3.4,
+            });
+          }
+        }
+      }
+      totalSentenceEnergyMv += authorCoherenceBoost;
 
       const hasNonTitleContentInQuery = queryTokensUpper.some(
         (qw, idx) => idx > 0 && qw.length >= 4 && !uBookTitle.includes(qw)
@@ -2211,8 +2561,12 @@ export class WasmMemristorEngine {
               wordMus.length > 0
                 ? Math.max(maxWordMu, sumContentMu * 0.68)
                 : 0.25;
+            const sentenceHasNonTitleQueryContent = queryTokensUpper.some(
+              (qw, idx) => idx > 0 && qw.length >= 4 && !uBookTitle.includes(qw) && sentence.toUpperCase().includes(qw)
+            );
             const isTitleFrag =
               hasNonTitleContentInQuery &&
+              !sentenceHasNonTitleQueryContent &&
               trimmedFrag.length >= 4 &&
               uBookTitle.includes(trimmedFrag.toUpperCase());
             const avgMu = isTitleFrag ? rawAvgMu * 0.52 : rawAvgMu;
@@ -2409,13 +2763,134 @@ export class WasmMemristorEngine {
       bestScore = 5;
     }
 
+    // =========================================================================
+    // MULTI-HOP SYNAPTIC PERCOLATION STAGE (Hop 1 Anchor -> Hop 2 Proposition)
+    // =========================================================================
+    const percolationPath: SynapticPercolationHop[] = [];
+    let multiHopEngaged = false;
+    let finalMolecule = bestMolecule;
+    let finalScore = bestScore;
+
+    if (bestMolecule && bestScore > 10) {
+      const qLower = rawQuery.toLowerCase();
+      const isEntityInquiry =
+        (bestMolecule.authorWords && bestMolecule.authorWords.some((w) => normQueryClean.includes(w))) ||
+        qLower.startsWith('who was') ||
+        qLower.startsWith('who is') ||
+        qLower.startsWith('who wrote') ||
+        qLower.startsWith('tell me about') ||
+        qLower.startsWith('what did');
+
+      // Check if this query benefits from Hop 2 percolation (e.g. from author/book anchor into core propositions)
+      if (isEntityInquiry) {
+        const docTitle = bestMolecule.docTitle;
+        const docMolecules = this.molecules.filter((m) => m.docTitle === docTitle);
+
+        // Identify carrier tokens (high-mu words from the document with mu >= 0.58)
+        const carrierWords: Array<{ word: string; mu: number }> = [];
+        const seenWords = new Set<string>();
+        // Sample evenly across the full document (not just the first few intro sentences)
+        const sampleStep = Math.max(1, Math.floor(docMolecules.length / 40));
+        for (let idx = 0; idx < docMolecules.length; idx += sampleStep) {
+          const dm = docMolecules[idx];
+          for (const w of dm.lowerWords) {
+            if (!seenWords.has(w) && w.length >= 4) {
+              seenWords.add(w);
+              const mu = this.computeTokenChemicalPotential(w);
+              if (mu >= 0.58) {
+                carrierWords.push({ word: w, mu });
+              }
+            }
+          }
+        }
+        // Prioritize query content fermions that are present in the target work
+        for (const qf of queryFermions) {
+          if (!seenWords.has(qf) && qf.length >= 4) {
+            const inDoc = docMolecules.some((dm) => dm.lowerWords.includes(qf));
+            if (inDoc) {
+              seenWords.add(qf);
+              carrierWords.push({ word: qf, mu: 1.0 });
+            }
+          }
+        }
+        carrierWords.sort((a, b) => b.mu - a.mu);
+        const topBridges = carrierWords.slice(0, 10).map((c) => c.word);
+
+        // Evaluate Hop 2: find the most substantive, content-rich proposition in this document
+        let hop2BestMol = bestMolecule;
+        let hop2MaxEnergy = 0;
+        const eta = 0.68; // Inter-somatic percolation transmission factor
+
+        for (const targetMol of docMolecules) {
+          const targetText = targetMol.focalText.trim();
+          if (targetText.endsWith('?')) continue;
+          if (targetText.length < 25) continue;
+
+          let hop2TransferCurrent = 0;
+          for (const bw of topBridges) {
+            if (targetMol.lowerWords.includes(bw)) {
+              hop2TransferCurrent += this.computeTokenChemicalPotential(bw) * 14.5;
+            }
+          }
+          // Bi-particle resonance boost: direct hit with query's primary fermion
+          for (const qf of queryFermions) {
+            if (qf.length >= 4 && targetMol.lowerWords.includes(qf)) {
+              hop2TransferCurrent += 38.0;
+            }
+          }
+
+          if (hop2TransferCurrent > hop2MaxEnergy) {
+            hop2MaxEnergy = hop2TransferCurrent;
+            hop2BestMol = targetMol;
+          }
+        }
+
+        if (hop2BestMol && hop2MaxEnergy > 15) {
+          multiHopEngaged = true;
+          finalMolecule = hop2BestMol;
+          finalScore = bestScore + hop2MaxEnergy * eta;
+
+          percolationPath.push(
+            {
+              hopNumber: 1,
+              stage: 'DIRECT_ANCHOR',
+              sourceConcept: rawQuery,
+              targetDocTitle: bestMolecule.docTitle,
+              targetAuthor: bestMolecule.docAuthor,
+              targetFocalText: bestMolecule.focalText,
+              transferConductanceUa: Math.round(bestScore * 0.42 * 10) / 10,
+              hopResonanceMv: Math.round(bestScore),
+              bridgeTokens:
+                bestMolecule.authorWords && bestMolecule.authorWords.length > 0
+                  ? bestMolecule.authorWords
+                  : topBridges.slice(0, 3),
+            },
+            {
+              hopNumber: 2,
+              stage: 'SYNAPTIC_PERCOLATION',
+              sourceConcept: `${bestMolecule.docAuthor || bestMolecule.docTitle} (Somatic Field)`,
+              targetDocTitle: hop2BestMol.docTitle,
+              targetAuthor: hop2BestMol.docAuthor,
+              targetFocalText: hop2BestMol.focalText,
+              transferConductanceUa: Math.round(hop2MaxEnergy * 10) / 10,
+              hopResonanceMv: Math.round(finalScore),
+              bridgeTokens: topBridges.filter((b) => hop2BestMol.lowerWords.includes(b)),
+            }
+          );
+        }
+      }
+    }
+
     return {
-      molecule: bestMolecule,
+      molecule: finalMolecule,
       startTokenIdx: 0,
-      resonanceEnergy: Math.round(bestScore),
+      resonanceEnergy: Math.round(finalScore),
       wavePackets: bestWavePackets.sort((a, b) => b.energyMv - a.energyMv).slice(0, 6),
       triEval: bestEval,
       caseSpinCoupling,
+      percolationPath,
+      multiHopEngaged,
+      hop1Molecule: bestMolecule,
     };
   }
 
@@ -2936,32 +3411,49 @@ export class WasmMemristorEngine {
       const leftText = leftCandidateTrajectory.trim();
       const rightText = rightCandidateTrajectory.trim();
 
-      // Check for mutual content overlap or convergence:
-      const isIdenticalOrSubstring =
-        leftText === rightText ||
-        (leftText.length > 0 && rightText.includes(leftText)) ||
-        (rightText.length > 0 && leftText.includes(rightText));
-
-      if (isIdenticalOrSubstring) {
-        // Both hemispheres converged onto the same or nested semantic attractor
-        frontalEmission = leftText.length >= rightText.length ? leftText : rightText;
-        arbitrationReason = `Frontal Lobe Bicameral Synthesis (Attractor Convergence): Left and Right proposals converged on coherent attractor (Agreement = ${(interHemisphericAgreement * 100).toFixed(0)}%, I_CC = ${callosumFluxUa} μA). Frontal Lobe synthesized unified emission.`;
-      } else if (alphaL >= 0.10 && alphaR >= 0.10 && leftText.length > 0 && rightText.length > 0) {
-        // Dual-hemispheric co-resonance: Frontal Lobe dynamically blends the relational and factual trajectories
-        if (relationalDipoleRatio >= 0.15 || rightProposal.provenance.sourceCrystal === 'Live Plastic Crystal Memory') {
-          frontalEmission = `${rightText} ${leftText}`;
+      // Multi-Hop Synaptic Percolation Synthesis Gate:
+      if (
+        winningRes.multiHopEngaged &&
+        winningRes.percolationPath &&
+        winningRes.percolationPath.length >= 2
+      ) {
+        const hop1 = winningRes.percolationPath[0];
+        const hop2 = winningRes.percolationPath[1];
+        const isWhoInquiry = /^\s*who\s+(?:was|is)\b/i.test(effectiveQuery);
+        if (isWhoInquiry && hop1.targetAuthor) {
+          frontalEmission = `${hop1.targetAuthor} was the author of ${hop2.targetDocTitle}, where ${hop2.targetFocalText}`;
         } else {
-          frontalEmission = alphaL >= alphaR ? `${leftText} ${rightText}` : `${rightText} ${leftText}`;
+          frontalEmission = hop2.targetFocalText;
         }
-        arbitrationReason = `Frontal Lobe Bicameral Synthesis (Dual Co-Resonance: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Dynamically integrated Right relational proposal (${rightProposal.provenance.docTitle}) with Left analytical proposal (${leftProposal.provenance.docTitle}) across callosal bridge (I_CC = ${callosumFluxUa} μA).`;
-      } else if (alphaL > alphaR) {
-        // Left dominant: Frontal Lobe attenuates sub-threshold Right channel and synthesizes from high-μ Left wave-packet
-        frontalEmission = leftText || winningRes.molecule?.focalText || 'Resonance pattern completed.';
-        arbitrationReason = `Frontal Lobe Bicameral Synthesis (Left Dominant: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Synthesized conversational emission centered on Left analytical wave-packet (${leftProposal.provenance.docTitle}) with callosal phase stabilization (I_CC = ${callosumFluxUa} μA).`;
+        arbitrationReason = `Frontal Lobe Bicameral Synthesis (Multi-Hop Synaptic Percolation Active: Hop 1 [${hop1.targetDocTitle}] -> Hop 2 [${hop2.bridgeTokens.join(', ')}]): Transferred ${hop2.transferConductanceUa} μA across inter-somatic delay lines to ground target proposition.`;
       } else {
-        // Right dominant: Frontal Lobe attenuates sub-threshold Left channel and synthesizes from high-μ Right wave-packet
-        frontalEmission = rightText || winningRes.molecule?.focalText || 'Resonance pattern completed.';
-        arbitrationReason = `Frontal Lobe Bicameral Synthesis (Right Dominant: α_R = ${(alphaR * 100).toFixed(1)}%, α_L = ${(alphaL * 100).toFixed(1)}%): Synthesized conversational emission centered on Right relational wave-packet (${rightProposal.provenance.docTitle}) with callosal phase stabilization (I_CC = ${callosumFluxUa} μA).`;
+        // Check for mutual content overlap or convergence:
+        const isIdenticalOrSubstring =
+          leftText === rightText ||
+          (leftText.length > 0 && rightText.includes(leftText)) ||
+          (rightText.length > 0 && leftText.includes(rightText));
+
+        if (isIdenticalOrSubstring) {
+          // Both hemispheres converged onto the same or nested semantic attractor
+          frontalEmission = leftText.length >= rightText.length ? leftText : rightText;
+          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Attractor Convergence): Left and Right proposals converged on coherent attractor (Agreement = ${(interHemisphericAgreement * 100).toFixed(0)}%, I_CC = ${callosumFluxUa} μA). Frontal Lobe synthesized unified emission.`;
+        } else if (alphaL >= 0.10 && alphaR >= 0.10 && leftText.length > 0 && rightText.length > 0) {
+          // Dual-hemispheric co-resonance: Frontal Lobe dynamically blends the relational and factual trajectories
+          if (relationalDipoleRatio >= 0.15 || rightProposal.provenance.sourceCrystal === 'Live Plastic Crystal Memory') {
+            frontalEmission = `${rightText} ${leftText}`;
+          } else {
+            frontalEmission = alphaL >= alphaR ? `${leftText} ${rightText}` : `${rightText} ${leftText}`;
+          }
+          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Dual Co-Resonance: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Dynamically integrated Right relational proposal (${rightProposal.provenance.docTitle}) with Left analytical proposal (${leftProposal.provenance.docTitle}) across callosal bridge (I_CC = ${callosumFluxUa} μA).`;
+        } else if (alphaL > alphaR) {
+          // Left dominant: Frontal Lobe attenuates sub-threshold Right channel and synthesizes from high-μ Left wave-packet
+          frontalEmission = leftText || winningRes.molecule?.focalText || 'Resonance pattern completed.';
+          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Left Dominant: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Synthesized conversational emission centered on Left analytical wave-packet (${leftProposal.provenance.docTitle}) with callosal phase stabilization (I_CC = ${callosumFluxUa} μA).`;
+        } else {
+          // Right dominant: Frontal Lobe attenuates sub-threshold Left channel and synthesizes from high-μ Right wave-packet
+          frontalEmission = rightText || winningRes.molecule?.focalText || 'Resonance pattern completed.';
+          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Right Dominant: α_R = ${(alphaR * 100).toFixed(1)}%, α_L = ${(alphaL * 100).toFixed(1)}%): Synthesized conversational emission centered on Right relational wave-packet (${rightProposal.provenance.docTitle}) with callosal phase stabilization (I_CC = ${callosumFluxUa} μA).`;
+        }
       }
     }
 
@@ -3093,6 +3585,9 @@ export class WasmMemristorEngine {
     // Advance the live temporal wave buffer S(t-1) for pure temporal stream continuity
     if (trimmedInput.length >= 3) {
       this.lastTemporalWave = trimmedInput;
+      // Register current turn into Frontal Lobe 24-Hour Working Memory Buffer
+      this.addWorkingMemoryTrace(trimmedInput, 'user', 0.65, resonanceEnergy, 'frontal');
+      this.addWorkingMemoryTrace(primaryResponse, 'system', 0.75, resonanceEnergy, 'frontal');
     }
 
     // 7. Extract highest chemical-potential particle clusters (mu-ranked, Zero Stopwords)
@@ -3192,6 +3687,8 @@ export class WasmMemristorEngine {
       activeSomasCount: Math.max(activeMacroSomas.length, activeTokenIds.length),
       plasticWriteOccurred,
       plasticSummary,
+      percolationPath: winningRes.percolationPath || leftRes.percolationPath || rightRes.percolationPath,
+      multiHopEngaged: winningRes.multiHopEngaged || leftRes.multiHopEngaged || rightRes.multiHopEngaged,
     };
   }
 
@@ -3781,7 +4278,7 @@ export class WasmMemristorEngine {
       // in case an earlier Gutenberg stream with a matching title overwrote any of them
       const missingCoreMols: CrossbarNarrativeMolecule[] = [];
       for (const doc of CORPORE_DOCUMENTS) {
-        const docMols = this.extractNarrativeMolecules(doc.content, doc.title);
+        const docMols = this.extractNarrativeMolecules(doc.content, doc.title, doc.author);
         for (const dm of docMols) {
           const exists = this.molecules.some(
             (m) => m.focalText.trim() === dm.focalText.trim()
@@ -3902,6 +4399,10 @@ export class WasmMemristorEngine {
       plasticQueryLearningEnabled: this.plasticQueryLearningEnabled,
       safeAbstentionEnabled: this.safeAbstentionEnabled,
       wasmPagesAllocated: this.memoryManager.wasmPagesAllocated,
+      workingMemoryTracesCount: this.workingMemoryState.traces.length,
+      workingMemoryAwakeHours: this.getWorkingMemoryUptime().hours,
+      isSleeping: this.workingMemoryState.isSleeping,
+      sleepCycleCount: this.workingMemoryState.sleepCycleCount,
     };
   }
 
@@ -3913,6 +4414,21 @@ export class WasmMemristorEngine {
     if (this.mmapSyncTimer) {
       clearTimeout(this.mmapSyncTimer);
       this.mmapSyncTimer = null;
+    }
+
+    this.workingMemoryState = {
+      isActive: true,
+      awakeStartTime: Date.now(),
+      awakeDurationHours: 24,
+      traces: [],
+      totalTracesToday: 0,
+      lastSleepTimestamp: null,
+      sleepCycleCount: 0,
+      isSleeping: false,
+      consolidationProgress: 0,
+    };
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.removeItem('synaptron_working_memory_24h');
     }
 
     this.activeSynapses = 0;

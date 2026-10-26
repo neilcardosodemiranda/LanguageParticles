@@ -23,6 +23,10 @@ import {
 } from '../physics/wasmMemristorEngine';
 import { gpuAccelerator } from '../physics/webgpuEngine';
 import {
+  WorkingMemoryTrace,
+  WorkingMemoryState,
+} from '../types/physics';
+import {
   CORPORE_DOCUMENTS,
   PRESET_QUERIES,
   CorpusDocument,
@@ -54,6 +58,11 @@ import {
   RotateCcw,
   Trash2,
   AlertTriangle,
+  Clock,
+  Moon,
+  Sun,
+  Brain,
+  History,
 } from 'lucide-react';
 
 interface GutenbergCatalogBook {
@@ -145,7 +154,18 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const [maxSynthesisTokens, setMaxSynthesisTokens] = useState<number>(56);
 
   // Visual Tabs
-  const [activeTab, setActiveTab] = useState<'console' | 'corpus' | 'matrix' | 'tuning'>('console');
+  const [activeTab, setActiveTab] = useState<'console' | 'working_memory' | 'corpus' | 'matrix' | 'tuning'>('console');
+
+  // 24-Hour Working Memory & Sleep Cycle States
+  const [workingMemory, setWorkingMemory] = useState<WorkingMemoryState>(
+    wasmCrossbarEngine.workingMemoryState
+  );
+  const [wmUptime, setWmUptime] = useState(wasmCrossbarEngine.getWorkingMemoryUptime());
+  const [monologueText, setMonologueText] = useState<string>('');
+  const [monologueRole, setMonologueRole] = useState<'monologue' | 'insight' | 'user'>('monologue');
+  const [monologueSalience, setMonologueSalience] = useState<number>(0.8);
+  const [isSleepingNow, setIsSleepingNow] = useState<boolean>(false);
+  const [sleepReport, setSleepReport] = useState<string>('');
 
   // Canvas ref for Memristor Spiking Matrix visualization
   const matrixCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -154,6 +174,8 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   useEffect(() => {
     const timer = setInterval(() => {
       setTelemetry(wasmCrossbarEngine.getTelemetry());
+      setWorkingMemory({ ...wasmCrossbarEngine.workingMemoryState });
+      setWmUptime(wasmCrossbarEngine.getWorkingMemoryUptime());
     }, 100);
 
     const handleVisibilityOrUnload = () => {
@@ -645,6 +667,41 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
     }
   };
 
+  // Add Internal Monologue or Insight to 24h Working Memory Buffer
+  const handleAddMonologueThought = () => {
+    if (!monologueText.trim()) return;
+    wasmCrossbarEngine.addWorkingMemoryTrace(
+      monologueText,
+      monologueRole,
+      monologueSalience,
+      25,
+      'frontal'
+    );
+    setWorkingMemory({ ...wasmCrossbarEngine.workingMemoryState });
+    setMonologueText('');
+    setPlasticFeedbackBanner(
+      `Recorded "${monologueRole.toUpperCase()}" into Frontal Lobe 24-hour Working Memory buffer.`
+    );
+    soundEngine.playParticleChirp();
+  };
+
+  // Trigger Sleep & Consolidation (Settles Working Memory into Synaptic Weights)
+  const handleTriggerSleepConsolidation = async () => {
+    setIsSleepingNow(true);
+    try {
+      soundEngine.playSomaDecay();
+      const res = await wasmCrossbarEngine.triggerSleepAndConsolidate();
+      setWorkingMemory({ ...wasmCrossbarEngine.workingMemoryState });
+      setWmUptime(wasmCrossbarEngine.getWorkingMemoryUptime());
+      setTelemetry(wasmCrossbarEngine.getTelemetry());
+      setSleepReport(res.summary);
+      setPlasticFeedbackBanner(res.summary);
+      soundEngine.playHadronFormation();
+    } finally {
+      setIsSleepingNow(false);
+    }
+  };
+
   // Preset Query Selection
   const handleSelectPresetQuery = (p: PresetQuery) => {
     setSelectedPresetId(p.id);
@@ -1016,6 +1073,24 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
         </button>
 
         <button
+          onClick={() => setActiveTab('working_memory')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
+            activeTab === 'working_memory'
+              ? 'bg-indigo-600 text-white font-semibold shadow-sm shadow-indigo-900/30'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+          <span>24h Working Memory &amp; Sleep Cycle</span>
+          <span className="text-[10px] font-mono bg-indigo-950/80 text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-700/50">
+            {workingMemory.traces.length} traces
+          </span>
+          {wmUptime.isOverdueForSleep && (
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="24h elapsed: Sleep consolidation recommended" />
+          )}
+        </button>
+
+        <button
           onClick={() => setActiveTab('corpus')}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
             activeTab === 'corpus'
@@ -1057,6 +1132,61 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Left 2 Cols: Terminal Output, Pauli-Orthogonal H8 Stream & Tri-Chamber M(t) Telemetry */}
           <div className="lg:col-span-2 space-y-3">
+            {/* 24-Hour Working Memory & Sleep Status Strip */}
+            <div className="bg-[#060a14] border border-indigo-900/60 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-7 h-7 rounded-md flex items-center justify-center ${
+                  isSleepingNow ? 'bg-indigo-950 text-indigo-400 animate-pulse border border-indigo-600' : 'bg-emerald-950/80 text-emerald-400 border border-emerald-700/50'
+                }`}>
+                  {isSleepingNow ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono font-bold text-indigo-300">
+                      {isSleepingNow ? 'BRAIN SLEEPING & CONSOLIDATING' : 'FRONTAL WORKING MEMORY ACTIVE'}
+                    </span>
+                    <span className="text-[10px] font-mono bg-indigo-950/80 text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-800/50">
+                      Cycle #{workingMemory.sleepCycleCount + 1}
+                    </span>
+                    {wmUptime.isOverdueForSleep && (
+                      <span className="text-[10px] font-mono bg-amber-950/80 text-amber-300 px-1.5 py-0.2 rounded border border-amber-800/60 animate-pulse">
+                        24h REACHED (SLEEP DUE)
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-slate-400 flex items-center gap-2 font-mono mt-0.5">
+                    <span>Awake: {String(wmUptime.hours).padStart(2, '0')}h {String(wmUptime.minutes).padStart(2, '0')}m / 24h</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{workingMemory.traces.length} active traces in buffer</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-emerald-400 font-semibold">Zero Goldfish Amnesia</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setActiveTab('working_memory')}
+                  className="px-2.5 py-1 text-[11px] rounded bg-slate-900 hover:bg-slate-800 border border-indigo-800/60 text-indigo-300 font-mono transition-colors cursor-pointer"
+                >
+                  View Buffer &amp; Monologue
+                </button>
+                <button
+                  onClick={handleTriggerSleepConsolidation}
+                  disabled={isSleepingNow}
+                  className={`px-3 py-1 text-xs rounded font-mono font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm ${
+                    isSleepingNow
+                      ? 'bg-indigo-950 text-indigo-400 border border-indigo-800 cursor-not-allowed'
+                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-900/40'
+                  }`}
+                  title="Consolidate active working memory traces into permanent Left/Right memristor weights and reset for a fresh 24h cycle"
+                >
+                  <Moon className="w-3.5 h-3.5" />
+                  <span>{isSleepingNow ? 'Consolidating...' : 'Sleep & Settle Memory'}</span>
+                </button>
+              </div>
+            </div>
+
             {/* Preset Question Buttons */}
             <div>
               <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
@@ -1391,6 +1521,52 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                 </div>
               )}
 
+              {/* Multi-Hop Synaptic Percolation Visualizer */}
+              {synthesisResult && synthesisResult.percolationPath && synthesisResult.percolationPath.length > 0 && (
+                <div className="pt-2 border-t border-slate-800/80">
+                  <div className="bg-gradient-to-r from-purple-950/40 via-indigo-950/30 to-slate-900/60 border border-purple-500/30 rounded p-2.5 font-mono text-[10px]">
+                    <div className="flex items-center justify-between text-purple-300 font-bold mb-1.5 pb-1 border-b border-purple-900/40">
+                      <span className="flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+                        MULTI-HOP SYNAPTIC PERCOLATION (E₁ → η·G → E₂)
+                      </span>
+                      <span className="text-purple-400 text-[9px] bg-purple-950/80 px-1.5 py-0.5 rounded border border-purple-700/40">
+                        {synthesisResult.percolationPath.length} ACTIVE HOPS · η=0.68
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {synthesisResult.percolationPath.map((hop, hIdx) => (
+                        <div key={hIdx} className="flex items-start gap-2 bg-slate-950/60 p-1.5 rounded border border-purple-900/30">
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 bg-purple-900/50 text-purple-200 border border-purple-600/40">
+                            HOP {hop.hopNumber}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between text-[9px] text-purple-200/90 mb-0.5">
+                              <span className="font-semibold truncate">
+                                {hop.stage === 'DIRECT_ANCHOR' ? '⚓ Anchor Excitation:' : '⚡ Synaptic Percolation:'}{' '}
+                                {hop.targetAuthor ? `${hop.targetAuthor} · ` : ''}{hop.targetDocTitle}
+                              </span>
+                              <span className="text-emerald-400 font-mono">
+                                +{hop.hopResonanceMv} mV ({hop.transferConductanceUa} μA)
+                              </span>
+                            </div>
+                            <div className="text-slate-300 text-[10px] italic truncate">
+                              &ldquo;{hop.targetFocalText}&rdquo;
+                            </div>
+                            {hop.bridgeTokens.length > 0 && (
+                              <div className="text-[9px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                <span className="text-purple-400">Bridge Fermions:</span>
+                                <span className="text-purple-300 font-semibold">{hop.bridgeTokens.join(', ')}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Coherent Wave-Packet Interference Pills */}
               {synthesisResult && synthesisResult.charWavePackets.length > 0 && (
                 <div className="pt-2 border-t border-slate-800/80">
@@ -1679,7 +1855,359 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
         </div>
       )}
 
-      {/* TAB 2: Project Gutenberg Global Library & Live Crawler */}
+      {/* TAB 2: 24-Hour Working Memory & Sleep Consolidation */}
+      {activeTab === 'working_memory' && (
+        <div className="space-y-4">
+          {/* Top Hero Banner */}
+          <div className="bg-[#020408] border border-indigo-900/60 rounded-lg p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Brain className="w-4 h-4 text-indigo-400" />
+                  <h3 className="text-xs font-mono font-bold text-indigo-300 uppercase tracking-wider">
+                    FRONTAL LOBE 24-HOUR EPISODIC WORKING MEMORY &amp; SLEEP CONSOLIDATION
+                  </h3>
+                  <span className="text-[10px] font-mono bg-indigo-950/90 text-indigo-300 border border-indigo-700/50 px-2 py-0.5 rounded">
+                    CYCLE #{workingMemory.sleepCycleCount + 1} ACTIVE
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 max-w-4xl">
+                  Unlike traditional stateless models that suffer from goldfish amnesia, the Frontal Lobe maintains an active, continuous{' '}
+                  <span className="text-indigo-300 font-semibold font-mono">24-hour Working Memory Buffer</span> that persists across sessions. When the system sleeps, active thoughts and dialogue settle down and permanently retrain the Left and Right Memristor crossbar via Hebbian STDP weight adaptation.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleTriggerSleepConsolidation}
+                  disabled={isSleepingNow}
+                  className={`px-4 py-2 rounded font-mono font-semibold text-xs flex items-center gap-2 cursor-pointer transition-all shadow-md ${
+                    isSleepingNow
+                      ? 'bg-indigo-950 text-indigo-400 border border-indigo-800 cursor-not-allowed'
+                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-900/40'
+                  }`}
+                >
+                  <Moon className="w-4 h-4" />
+                  <span>{isSleepingNow ? 'Consolidating Memories...' : 'Trigger Sleep Consolidation'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Sleep Consolidation Feedback Banner */}
+            {sleepReport && (
+              <div className="p-2.5 rounded bg-indigo-950/60 border border-indigo-700/50 text-xs font-mono text-indigo-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+                <span>{sleepReport}</span>
+              </div>
+            )}
+
+            {/* Two-Column Status Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+              {/* Card 1: Circadian State & 24h Waking Clock */}
+              <div className="bg-[#060a14] border border-slate-800/80 rounded-lg p-3 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold text-slate-300 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    CIRCADIAN CLOCK &amp; UPTIME
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${isSleepingNow ? 'bg-indigo-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
+                    <span className={`text-[10px] font-mono font-semibold ${isSleepingNow ? 'text-indigo-300' : 'text-emerald-300'}`}>
+                      {isSleepingNow ? 'SLEEPING & CONSOLIDATING' : 'AWAKE & REASONING'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-baseline gap-2">
+                  <div className="text-2xl font-bold font-mono text-slate-100 tabular-nums">
+                    {String(wmUptime.hours).padStart(2, '0')}h {String(wmUptime.minutes).padStart(2, '0')}m {String(wmUptime.seconds).padStart(2, '0')}s
+                  </div>
+                  <div className="text-xs text-slate-400 font-mono">
+                    / 24h 00m active period
+                  </div>
+                </div>
+
+                {/* 24h Progress Bar with Milestones */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                    <span>Progress: {wmUptime.percentOf24h}%</span>
+                    <span>{wmUptime.isOverdueForSleep ? 'Sleep Consolidation Due' : `${Math.max(0, 24 - wmUptime.hours)}h remaining`}</span>
+                  </div>
+                  <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden border border-slate-800 relative">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        wmUptime.isOverdueForSleep
+                          ? 'bg-gradient-to-r from-amber-500 to-rose-500'
+                          : 'bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-400'
+                      }`}
+                      style={{ width: `${Math.min(100, Math.max(2, wmUptime.percentOf24h))}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[9px] font-mono text-slate-500 pt-0.5">
+                    <span>0h (Dawn)</span>
+                    <span>6h (Morning)</span>
+                    <span>12h (Midday)</span>
+                    <span>18h (Evening)</span>
+                    <span>24h (Sleep)</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                  <span>Waking Cycle Started:</span>
+                  <span className="text-slate-200">{new Date(workingMemory.awakeStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              </div>
+
+              {/* Card 2: Episodic Buffer Capacity & Synaptic Stats */}
+              <div className="bg-[#060a14] border border-slate-800/80 rounded-lg p-3 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold text-slate-300 flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-purple-400" />
+                    WORKING MEMORY BUFFER CAPACITY
+                  </span>
+                  <span className="text-[10px] font-mono bg-purple-950/80 text-purple-300 border border-purple-800/60 px-1.5 py-0.5 rounded">
+                    PERSISTENT 24H STORAGE
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-center pt-1">
+                  <div className="bg-slate-900/60 border border-slate-800 p-2 rounded">
+                    <div className="text-[10px] text-slate-400 font-mono">TRACES IN BUFFER</div>
+                    <div className="text-lg font-bold font-mono text-indigo-300 tabular-nums">
+                      {workingMemory.traces.length} <span className="text-xs font-normal text-slate-400">/ 500</span>
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/60 border border-slate-800 p-2 rounded">
+                    <div className="text-[10px] text-slate-400 font-mono">SLEEP CYCLES RUN</div>
+                    <div className="text-lg font-bold font-mono text-purple-300 tabular-nums">
+                      {workingMemory.sleepCycleCount}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-1 pt-1 text-[11px] font-mono text-slate-400">
+                  <div className="flex justify-between">
+                    <span>Last Sleep Settled:</span>
+                    <span className="text-slate-200">
+                      {workingMemory.lastConsolidationReport?.settledAt || 'Not consolidated yet'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Synapses Potentiated in Last Sleep:</span>
+                    <span className="text-emerald-400">
+                      +{workingMemory.lastConsolidationReport?.synapsesPotentiated || 0} G_ij
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Molecules Etched into Crystal:</span>
+                    <span className="text-sky-400">
+                      +{workingMemory.lastConsolidationReport?.moleculesEtched || 0} M(t)
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Internal Monologue & Thought Injection Chamber */}
+          <div className="bg-[#060a14] border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+              <div>
+                <h4 className="text-xs font-mono font-bold text-slate-200 uppercase flex items-center gap-2">
+                  <Brain className="w-4 h-4 text-purple-400" />
+                  <span>INTERNAL MONOLOGUE &amp; REASONING INJECTION CHAMBER</span>
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Inject internal monologue thoughts, conscious reflections, or core principles into the Frontal Lobe working memory buffer.
+                </p>
+              </div>
+
+              {/* Tag selector */}
+              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded border border-slate-800 text-xs font-mono">
+                <button
+                  onClick={() => setMonologueRole('monologue')}
+                  className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
+                    monologueRole === 'monologue' ? 'bg-purple-600 text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Internal Monologue (Voice)
+                </button>
+                <button
+                  onClick={() => setMonologueRole('insight')}
+                  className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
+                    monologueRole === 'insight' ? 'bg-amber-600 text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Philosophical Insight
+                </button>
+                <button
+                  onClick={() => setMonologueRole('user')}
+                  className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
+                    monologueRole === 'user' ? 'bg-sky-600 text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  User Experience
+                </button>
+              </div>
+            </div>
+
+            {/* Input Form */}
+            <div className="space-y-2">
+              <textarea
+                value={monologueText}
+                onChange={(e) => setMonologueText(e.target.value)}
+                rows={2}
+                placeholder="Type your internal monologue thought, e.g.: 'Rise a great man, a great man walks straight on his own back not with the help of others' or 'Marcus Aurelius says we must care for the vessel'..."
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2.5 text-xs text-slate-100 placeholder:text-slate-500 font-mono focus:outline-none focus:border-indigo-500 resize-none"
+              />
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {/* Salience Slider */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-slate-400">Salience (Importance):</span>
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="1.0"
+                    step="0.05"
+                    value={monologueSalience}
+                    onChange={(e) => setMonologueSalience(parseFloat(e.target.value))}
+                    className="w-28 accent-indigo-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-mono text-indigo-300 font-semibold tabular-nums">
+                    {(monologueSalience * 100).toFixed(0)}%
+                  </span>
+                </div>
+
+                {/* Submit button */}
+                <button
+                  onClick={handleAddMonologueThought}
+                  disabled={!monologueText.trim()}
+                  className="px-4 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-mono font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm shadow-indigo-900/30"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Record into 24h Working Memory</span>
+                </button>
+              </div>
+
+              {/* Sample quick prompts */}
+              <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-mono text-slate-500 mr-1">Quick Reflections:</span>
+                {[
+                  'Rise a great man, a great man walks straight on his own back not with the help of others.',
+                  'Marcus Aurelius: We must take care of the vessel which carries the soul.',
+                  'Consciousness is the internal monologue: questioning reality 24/7.',
+                  'Bicameral hypothesis: Left and Right brains communicate across the callosal bridge.',
+                ].map((sample, sIdx) => (
+                  <button
+                    key={sIdx}
+                    onClick={() => {
+                      setMonologueText(sample);
+                      setMonologueRole('insight');
+                      setMonologueSalience(0.9);
+                    }}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-slate-100 transition-colors cursor-pointer truncate max-w-xs"
+                  >
+                    "{sample.slice(0, 36)}..."
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Active 24-Hour Working Memory Trace Stream */}
+          <div className="bg-[#060a14] border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-sky-400" />
+                <h4 className="text-xs font-mono font-bold text-slate-200 uppercase">
+                  ACTIVE 24-HOUR EPISODIC WORKING MEMORY BUFFER ({workingMemory.traces.length} TRACES)
+                </h4>
+              </div>
+              <div className="text-[10px] font-mono text-slate-400">
+                Retains context across 24h awake sessions · Settle on Sleep
+              </div>
+            </div>
+
+            {workingMemory.traces.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-500 font-mono italic">
+                Working memory buffer is currently empty. Ask a question or inject an internal monologue thought to populate today's buffer.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+                {workingMemory.traces.slice().reverse().map((trace) => (
+                  <div
+                    key={trace.id}
+                    className="bg-slate-900/70 border border-slate-800/80 rounded p-2.5 space-y-1.5 hover:border-slate-700 transition-colors"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-slate-500 tabular-nums">
+                          {trace.timeStr}
+                        </span>
+                        <span
+                          className={`text-[9px] font-mono font-semibold px-1.5 py-0.2 rounded border uppercase ${
+                            trace.role === 'monologue'
+                              ? 'bg-purple-950/80 text-purple-300 border-purple-800/60'
+                              : trace.role === 'insight'
+                              ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
+                              : trace.role === 'user'
+                              ? 'bg-sky-950/80 text-sky-300 border-sky-800/60'
+                              : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                          }`}
+                        >
+                          {trace.role === 'monologue'
+                            ? 'INTERNAL MONOLOGUE'
+                            : trace.role === 'insight'
+                            ? 'PHILOSOPHICAL INSIGHT'
+                            : trace.role === 'user'
+                            ? 'USER QUERY'
+                            : 'FRONTAL LOBE SYNTHESIS'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-[10px] font-mono">
+                        <span className="text-slate-400">
+                          Salience: <span className="text-indigo-300 font-semibold">{(trace.salience * 100).toFixed(0)}%</span>
+                        </span>
+                        <span
+                          className={`text-[9px] px-1 py-0.2 rounded ${
+                            trace.consolidated
+                              ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
+                              : 'bg-indigo-950 text-indigo-300 border border-indigo-800/60'
+                          }`}
+                        >
+                          {trace.consolidated ? 'CONSOLIDATED (G_ij)' : 'ACTIVE (24H BUFFER)'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-200 font-mono leading-relaxed">
+                      {trace.text}
+                    </p>
+
+                    {trace.associatedTokens && trace.associatedTokens.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1 pt-1 border-t border-slate-800/40">
+                        <span className="text-[9px] font-mono text-slate-500">Resonant Somas:</span>
+                        {trace.associatedTokens.map((tok, tIdx) => (
+                          <span
+                            key={tIdx}
+                            className="text-[9px] font-mono bg-slate-950 text-slate-400 px-1 py-0.2 rounded border border-slate-800"
+                          >
+                            {tok}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: Project Gutenberg Global Library & Live Crawler */}
       {activeTab === 'corpus' && (
         <div className="space-y-4">
           {/* Top Hero Panel: Project Gutenberg 75,000+ Book Streamer & Autonomous Crawler */}

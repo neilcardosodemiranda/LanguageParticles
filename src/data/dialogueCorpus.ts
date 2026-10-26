@@ -56,6 +56,18 @@ export const PRESET_QUERIES: PresetQuery[] = [
     expectedKeywords: ['Light', 'propagated', 'velocity', 'empty', 'space'],
   },
   {
+    id: 'einstein_identity',
+    prompt: 'Who was Albert Einstein?',
+    category: 'Multi-Hop Percolation (Author ➔ Theory)',
+    expectedKeywords: ['Einstein', 'author', 'Relativity', 'light', 'space'],
+  },
+  {
+    id: 'newton_identity',
+    prompt: 'Who was Sir Isaac Newton?',
+    category: 'Multi-Hop Percolation (Author ➔ Laws)',
+    expectedKeywords: ['Newton', 'author', 'Principia', 'Action', 'Reaction'],
+  },
+  {
     id: 'einstein_gravity_light',
     prompt: 'How does the gravitational field affect rays of light?',
     category: 'Left Hemisphere (Physics)',
@@ -72,6 +84,12 @@ export const PRESET_QUERIES: PresetQuery[] = [
     prompt: 'Where did the little golden key fit?',
     category: 'Left Hemisphere (Literature)',
     expectedKeywords: ['golden', 'key', 'lock', 'low', 'curtain', 'door'],
+  },
+  {
+    id: 'frankenstein_identity',
+    prompt: 'Who was Frankenstein?',
+    category: 'Multi-Hop Percolation (Author ➔ Character)',
+    expectedKeywords: ['Victor', 'Frankenstein', 'Genevese', 'Shelley', 'spark'],
   },
   {
     id: 'frankenstein_spark',
@@ -165,8 +183,11 @@ However, on the second time round, she came upon a low curtain she had not notic
     category: 'literature',
     hemisphere: 'left',
     year: '1818',
-    tokenCountEstimate: 390,
-    content: `It was on a dreary night of November that I beheld the accomplishment of my toils. With an anxiety that almost amounted to agony, I collected the instruments of life around me, that I might infuse a spark of being into the lifeless thing that lay at my feet.
+    tokenCountEstimate: 510,
+    content: `I am by birth a Genevese, and my family is one of the most distinguished of that republic: my name is Victor Frankenstein.
+Natural philosophy is the genius that has regulated my fate; I desired to learn the secret of heaven and earth, to inquire into the structure of the human frame, and whence the principle of life proceeded.
+After days and nights of incredible labour and fatigue, I succeeded in discovering the cause of generation and life; nay, more, I became myself capable of bestowing animation upon lifeless matter.
+It was on a dreary night of November that I beheld the accomplishment of my toils. With an anxiety that almost amounted to agony, I collected the instruments of life around me, that I might infuse a spark of being into the lifeless thing that lay at my feet.
 It was already one in the morning; the rain pattered dismally against the panes, and my candle was nearly burnt out, when, by the glimmer of the half-extinguished light, I saw the dull yellow eye of the creature open; it breathed hard, and a convulsive motion agitated its limbs.
 The spark of galvanic electricity had awakened the creature and its nervous system: the mind breathed within the reconstructed biological matrix.
 Life and death appeared to me ideal bounds, which I should first break through, and pour a torrent of light into our dark world.`,

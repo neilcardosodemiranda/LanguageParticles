@@ -353,5 +353,38 @@ export interface MemoryRecallResult {
   bicameral?: BicameralMindTelemetry;
 }
 
+export interface WorkingMemoryTrace {
+  id: string;
+  timestamp: number;
+  timeStr: string;
+  text: string;
+  role: 'user' | 'system' | 'monologue' | 'insight';
+  salience: number; // 0.0 to 1.0 importance
+  sourceHemisphere?: 'left' | 'right' | 'frontal';
+  associatedTokens: string[];
+  resonanceMv: number;
+  consolidated: boolean;
+}
+
+export interface WorkingMemoryState {
+  isActive: boolean;
+  awakeStartTime: number;
+  awakeDurationHours: number; // typically 24h
+  traces: WorkingMemoryTrace[];
+  totalTracesToday: number;
+  lastSleepTimestamp: number | null;
+  sleepCycleCount: number;
+  isSleeping: boolean;
+  consolidationProgress: number; // 0 to 100%
+  lastConsolidationReport?: {
+    timestamp: number;
+    tracesProcessed: number;
+    synapsesPotentiated: number;
+    moleculesEtched: number;
+    settledAt: string;
+    summary: string;
+  };
+}
+
 
 

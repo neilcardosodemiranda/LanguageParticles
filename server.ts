@@ -258,10 +258,16 @@ function stripGutenbergBoilerplate(raw: string): {
     endIdx = endHit.index;
   }
 
-  const cleanText = normalized
+  let cleanText = normalized
     .slice(startIdx, endIdx)
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+
+  // Strip Table of Contents lists (e.g. CONTENTS ... Letter 1 ... Chapter 24)
+  cleanText = cleanText.replace(
+    /\bCONTENTS\b[\s\S]*?(?=(?:Letter\s+\d+|Chapter\s+\d+|Preface|Introduction|Book\s+(?:\d+|[IVXLCDM]+))\b)/i,
+    ''
+  ).trim();
 
   return {
     cleanText: cleanText.length > 200 ? cleanText : normalized.trim(),
