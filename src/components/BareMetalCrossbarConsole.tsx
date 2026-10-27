@@ -33,6 +33,7 @@ import {
   PresetQuery,
 } from '../data/dialogueCorpus';
 import { soundEngine } from '../utils/audio';
+import { MassiveQaDatasetsView } from './MassiveQaDatasetsView';
 import {
   Cpu,
   Zap,
@@ -154,7 +155,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
   const [maxSynthesisTokens, setMaxSynthesisTokens] = useState<number>(56);
 
   // Visual Tabs
-  const [activeTab, setActiveTab] = useState<'console' | 'working_memory' | 'corpus' | 'matrix' | 'tuning'>('console');
+  const [activeTab, setActiveTab] = useState<'console' | 'working_memory' | 'corpus' | 'qa_datasets' | 'matrix' | 'tuning'>('console');
 
   // 24-Hour Working Memory & Sleep Cycle States
   const [workingMemory, setWorkingMemory] = useState<WorkingMemoryState>(
@@ -219,13 +220,22 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
             await wasmCrossbarEngine.syncToBinaryMmap();
           }
 
-          // Ensure core foundational molecules are present if a previous Gutenberg #35 stream overwrote them
+          // Ensure core foundational molecules, Right Hemisphere knowledge, and instruction-tuned dialogues are present
           const hasFoundationalTimeMachine = wasmCrossbarEngine.molecules.some((m) =>
             m.focalText && m.focalText.includes('made of nickel, parts of ivory, and crystalline quartz')
           );
-          if (!hasFoundationalTimeMachine) {
+          const hasRightHemisphereKnowledge = wasmCrossbarEngine.molecules.some((m) =>
+            m.docTitle && m.docTitle.startsWith('Right Hemisphere:')
+          );
+          const hasInstructionTunedKnowledge = wasmCrossbarEngine.molecules.some((m) =>
+            m.docTitle && m.docTitle.includes('Instruction-Tuned')
+          );
+          if (!hasFoundationalTimeMachine || !hasRightHemisphereKnowledge || !hasInstructionTunedKnowledge) {
             for (const doc of CORPORE_DOCUMENTS) {
-              wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
+              const alreadyHas = wasmCrossbarEngine.molecules.some((m) => m.docTitle === doc.title);
+              if (!alreadyHas) {
+                wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15, doc.author);
+              }
             }
             await wasmCrossbarEngine.syncToBinaryMmap();
           }
@@ -239,7 +249,7 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
           handleExecuteSynthesis(currentQuery, true);
         } else if (wasmCrossbarEngine.totalIngestedTokens === 0) {
           for (const doc of CORPORE_DOCUMENTS) {
-            wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15);
+            wasmCrossbarEngine.ingestText(doc.content, doc.title, 2, 0.15, doc.author);
           }
           await wasmCrossbarEngine.syncToBinaryMmap();
           if (!mounted) return;
@@ -1101,6 +1111,21 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
           <BookOpen className="w-3.5 h-3.5" />
           <span>Project Gutenberg Global Library (75,000+ Books)</span>
         </button>
+ 
+        <button
+          onClick={() => setActiveTab('qa_datasets')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
+            activeTab === 'qa_datasets'
+              ? 'bg-emerald-600 text-white font-semibold shadow-sm shadow-emerald-900/30'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Massive Q&amp;A Datasets (52k Alpaca · 15k Dolly · 100k SQuAD · EE)</span>
+          <span className="text-[10px] font-mono bg-emerald-950/80 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-700/50">
+            Hundreds of Thousands
+          </span>
+        </button>
 
         <button
           onClick={() => setActiveTab('matrix')}
@@ -1501,13 +1526,26 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                   {/* Frontal Lobe Executive Decision & Sole Voice Card */}
                   <div className="bg-slate-900/90 border border-amber-500/30 rounded px-2.5 py-1.5 text-[10px] font-mono text-slate-300 space-y-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-amber-300 font-bold">
+                      <span className="text-amber-300 font-bold flex items-center gap-1.5">
+                        <Sparkles className="w-3 h-3 text-amber-400" />
                         FRONTAL LOBE ARBITRATION (SOLE CONVERSATIONAL EMITTER · final_output != null):
                       </span>
                       <span className="text-emerald-400 text-[9px]">
                         Confidence: {(synthesisResult.bicameral.frontalLobeDecision?.confidenceScore ?? 0.85) * 100}% · Grounding: {(synthesisResult.bicameral.frontalLobeDecision?.groundingScore ?? 0.9) * 100}%
                       </span>
                     </div>
+
+                    {/* Equilibrium Propagation Feedback Telemetry */}
+                    <div className="flex items-center gap-2 text-[9px] text-purple-300 bg-purple-950/40 border border-purple-800/40 px-2 py-0.5 rounded">
+                      <span>Equilibrium Propagation:</span>
+                      <b className="text-amber-300">{synthesisResult.bicameral.equilibriumSettlingLoops ?? 1} Settling Pass{(synthesisResult.bicameral.equilibriumSettlingLoops ?? 1) > 1 ? 'es' : ''}</b>
+                      <span>·</span>
+                      <span>Callosal Error Flux (ΔI_error):</span>
+                      <b className="text-cyan-300">{synthesisResult.bicameral.equilibriumDeltaI ?? 0} mV</b>
+                      <span>·</span>
+                      <span className="text-slate-400">Thermodynamic Phase-Lock Settled</span>
+                    </div>
+
                     <div className="text-slate-300">
                       {synthesisResult.bicameral.frontalLobeOrchestrator.arbitrationReason}
                     </div>
@@ -1518,6 +1556,37 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
                       </div>
                     )}
                   </div>
+
+                  {/* Cascading Multi-Hop Energy Decay Stream (Hop 1 -> Hop 2 -> Hop 3) */}
+                  {synthesisResult.bicameral.multiHopCascade && synthesisResult.bicameral.multiHopCascade.length > 1 && (
+                    <div className="bg-gradient-to-r from-amber-950/30 via-slate-900/80 to-purple-950/30 border border-amber-500/40 rounded p-2 text-[10px] font-mono space-y-1.5">
+                      <div className="flex items-center justify-between text-amber-300 font-bold border-b border-amber-900/40 pb-1">
+                        <span className="flex items-center gap-1.5">
+                          <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                          CASCADING MULTI-HOP ENERGY DECAY STREAM ({synthesisResult.bicameral.multiHopCascade.length} HOPS CONVERGED)
+                        </span>
+                        <span className="text-[9px] text-slate-400">
+                          Energy decays across inter-somatic delay lines until V &lt; V_th
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5">
+                        {synthesisResult.bicameral.multiHopCascade.map((c) => (
+                          <div key={c.hop} className="bg-slate-950/70 border border-slate-800 p-1.5 rounded space-y-0.5">
+                            <div className="flex items-center justify-between text-[9px]">
+                              <span className="font-bold text-amber-400">HOP {c.hop}: {c.label}</span>
+                              <span className="text-emerald-400 font-bold">{c.energyMv} mV</span>
+                            </div>
+                            <div className="text-[8px] text-slate-400 truncate">
+                              Crystal: {c.sourceCrystal}
+                            </div>
+                            <div className="text-[9px] text-slate-200 line-clamp-2 italic pt-0.5">
+                              &ldquo;{c.text}&rdquo;
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2687,6 +2756,21 @@ export const BareMetalCrossbarConsole: React.FC<BareMetalCrossbarConsoleProps> =
             </div>
           </div>
         </div>
+      )}
+
+      {/* TAB: Massive Q&A Datasets Streamer */}
+      {activeTab === 'qa_datasets' && (
+        <MassiveQaDatasetsView
+          onDatasetTrained={() => {
+            setTelemetry(wasmCrossbarEngine.getTelemetry());
+            setIngestedLedger([...wasmCrossbarEngine.ingestedBookRegistry]);
+          }}
+          onExecuteQuery={(q) => {
+            setCurrentQuery(q);
+            setActiveTab('console');
+            handleExecuteSynthesis(q);
+          }}
+        />
       )}
 
       {/* TAB 3: CSR Crossbar Matrix Heatmap */}

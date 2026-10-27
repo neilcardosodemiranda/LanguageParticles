@@ -330,6 +330,15 @@ export interface BicameralMindTelemetry {
     synthesisMode?: 'PURE_ANALYTICAL' | 'PURE_RELATIONAL' | 'BICAMERAL_COMPLEMENTARY_SYNTHESIS' | 'CLARIFICATION_REQUEST' | 'SAFE_ABSTENTION';
     final_output: string;
   };
+  equilibriumSettlingLoops?: number;
+  equilibriumDeltaI?: number;
+  multiHopCascade?: Array<{
+    hop: number;
+    label: string;
+    text: string;
+    energyMv: number;
+    sourceCrystal: string;
+  }>;
 }
 
 export interface MemoryRecallResult {

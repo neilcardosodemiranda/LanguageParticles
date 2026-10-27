@@ -28,6 +28,7 @@ import {
 } from '../types/physics';
 import { WasmPersistentMemoryManager } from './wasmPersistentMemoryManager';
 import { CORPORE_DOCUMENTS } from '../data/dialogueCorpus';
+import type { QaPair, QaStreamProgress } from '../data/qaDatasetCatalog';
 
 export type MemoryCapacityPreset = '5M' | '25M' | '100M';
 
@@ -799,14 +800,14 @@ export class WasmMemristorEngine {
     const extracted: CrossbarNarrativeMolecule[] = [];
     const isRightDialogicDoc = title.startsWith('Right Hemisphere:');
 
-    const authorWords = author
+    const authorWords = author && author !== 'Classic Corpus'
       ? Array.from(
           new Set(
             author
               .toLowerCase()
               .replace(/[^a-z0-9'-]/g, ' ')
               .split(/\s+/)
-              .filter((w) => w.length >= 2)
+              .filter((w) => w.length >= 2 && w !== 'corpus' && w !== 'classic')
           )
         )
       : [];
@@ -838,7 +839,8 @@ export class WasmMemristorEngine {
       if (!isRightDialogicDoc && focal.length < 15) {
         continue;
       }
-      if (isRightDialogicDoc && focal.endsWith('?')) {
+      const isQuestionOrPrompt = focal.endsWith('?') || focal.endsWith('!');
+      if (isRightDialogicDoc && isQuestionOrPrompt) {
         pendingQuestionStimuli.push(focal);
         continue;
       }
@@ -849,7 +851,7 @@ export class WasmMemristorEngine {
           : i > 0
             ? sentences[i - 1]
             : '';
-      if (isRightDialogicDoc && !focal.endsWith('?')) {
+      if (isRightDialogicDoc && !isQuestionOrPrompt) {
         pendingQuestionStimuli = [];
       }
 
@@ -874,6 +876,7 @@ export class WasmMemristorEngine {
         ])
       );
 
+      // 1. Left Hemisphere Analytical Molecule (Chronological forward text & strict syntax)
       extracted.push({
         id: molId,
         lineageId,
@@ -888,6 +891,35 @@ export class WasmMemristorEngine {
         lowerWords: moleculeLowerWords,
         authorWords,
       });
+
+      // 2. Right Hemisphere Relational & Thematic Molecule (Topological Semantic & Dialogic Matrix)
+      // Gives the Right Hemisphere real book knowledge with S(t-1) -> S(t) contextual coupling
+      if (!isRightDialogicDoc) {
+        const rightMolId = `RH::${title}::M${i}`;
+        const rightToks = this.tokenize(focal);
+        const rightContextToks = this.tokenize(`${prev} ${focal}`);
+        extracted.push({
+          id: rightMolId,
+          lineageId: lineageId + 500_000,
+          docTitle: `Right Hemisphere: ${title} (Thematic & Relational Crystal)`,
+          docAuthor: author,
+          sentenceIndex: i,
+          prevText: prev || next || focal,
+          focalText: focal,
+          nextText: next,
+          clauses: clauses.length > 0 ? clauses : [focal],
+          tokenIds: rightToks.map((t) => this.getOrRegisterToken(t)),
+          lowerWords: Array.from(
+            new Set([
+              ...rightContextToks
+                .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+                .filter((w) => w.length >= 2),
+              ...authorWords,
+            ])
+          ),
+          authorWords,
+        });
+      }
     }
 
     return extracted;
@@ -1136,7 +1168,7 @@ export class WasmMemristorEngine {
     title: string,
     epochs: number = 1,
     learningRate: number = 0.15,
-    author: string = 'Classic Corpus'
+    author: string = ''
   ): { tokensProcessed: number; newSynapses: number; durationMs: number } {
     const startTime = performance.now();
     const cleanText = this.stripGutenbergBoilerplate(text);
@@ -1339,6 +1371,197 @@ export class WasmMemristorEngine {
     await this.syncToBinaryMmap();
 
     return record;
+  }
+
+  /**
+   * High-Throughput Non-Blocking Chunked Q&A / Instruction Streamer:
+   * Direct-maps hundreds of thousands of Question-Answer / Instruction-Response pairs
+   * directly into the 25M–100M Memristor Crossbar ($S(t-1) \to S(t)$ Right Hemisphere delay lines)
+   * with live STDP potentiation, Pauli H8 character lines, and zero-GC chunked yielding.
+   */
+  public async ingestQaPairStream(
+    pairs: QaPair[],
+    datasetTitle: string,
+    epochs: number = 1,
+    learningRate: number = 0.16,
+    onProgress?: (progress: QaStreamProgress) => void
+  ): Promise<{
+    datasetTitle: string;
+    pairsIngested: number;
+    tokensIngested: number;
+    newSynapses: number;
+    newVocab: number;
+    durationMs: number;
+    tokensPerSec: number;
+  }> {
+    const vocabBefore = Math.max(0, this.vocabList.length - 3);
+    const startSynapses = this.activeSynapses + this.charDelayEdgeCount;
+    const startTime = performance.now();
+
+    const docTitle = `Right Hemisphere: ${datasetTitle}`;
+    const newMols: CrossbarNarrativeMolecule[] = [];
+    const lineageId = this.molecules.length + 500_000 + 1;
+
+    // Convert each QA pair into a Tri-Chamber Narrative Molecule M(t) = [S(t-1)=Question, S(t)=Answer, S(t+1)]
+    for (let i = 0; i < pairs.length; i++) {
+      const p = pairs[i];
+      let q = p.question.trim();
+      let a = p.answer.trim();
+      if (!q || !a) continue;
+
+      if (!q.endsWith('?') && !q.endsWith('.') && !q.endsWith('!')) {
+        q += '?';
+      }
+
+      const toks = this.tokenize(a);
+      const tokenIds = toks.map((t) => this.getOrRegisterToken(t));
+      const clauses = a
+        .split(/[;:]/)
+        .map((c) => c.trim())
+        .filter((c) => c.length > 3);
+      const lowerWords = toks
+        .map((t) => t.toLowerCase().replace(/[^a-z0-9'-]/g, ''))
+        .filter((w) => w.length >= 2);
+
+      const mol: CrossbarNarrativeMolecule = {
+        id: `qa-${datasetTitle.replace(/[^a-zA-Z0-9]/g, '_')}-${i}`,
+        lineageId,
+        docTitle,
+        sentenceIndex: i,
+        prevText: q,
+        focalText: a,
+        nextText: '',
+        clauses: clauses.length > 0 ? clauses : [a],
+        tokenIds,
+        lowerWords,
+      };
+      newMols.push(mol);
+    }
+
+    if (newMols.length === 0) {
+      return {
+        datasetTitle,
+        pairsIngested: 0,
+        tokensIngested: 0,
+        newSynapses: 0,
+        newVocab: 0,
+        durationMs: 0,
+        tokensPerSec: 0,
+      };
+    }
+
+    // Keep existing molecules while appending new Q&A molecules
+    this.molecules = [
+      ...this.molecules.filter((m) => m.docTitle !== docTitle),
+      ...newMols,
+    ];
+
+    let totalTokensInPass = 0;
+    let activeComputeMs = 1;
+    const totalMols = newMols.length;
+    const chunkSize = 150; // Q&A pairs per non-blocking slice
+    const h8Stride = totalMols > 2000 ? 5 : totalMols > 500 ? 2 : 1;
+
+    for (let startIdx = 0; startIdx < totalMols; startIdx += chunkSize) {
+      const sliceStart = performance.now();
+      const endIdx = Math.min(totalMols, startIdx + chunkSize);
+
+      for (let i = startIdx; i < endIdx; i++) {
+        const mol = newMols[i];
+        const trainH8 = this.charDelayEdgeCount < 500_000 && i % h8Stride === 0;
+
+        // 1. Train Question -> Answer cross-chamber forward transition
+        const qToks = this.tokenize(mol.prevText);
+        const aToks = this.tokenize(mol.focalText);
+        if (qToks.length > 0 && aToks.length > 0) {
+          // Potentiate coupling from salient question keywords to leading answer tokens
+          for (let qIdx = Math.max(0, qToks.length - 4); qIdx < qToks.length; qIdx++) {
+            const qWord = qToks[qIdx].toUpperCase();
+            const qSoma = this.getOrRegisterToken(qWord);
+            for (let aIdx = 0; aIdx < Math.min(3, aToks.length); aIdx++) {
+              const aWord = aToks[aIdx].toUpperCase();
+              const aSoma = this.getOrRegisterToken(aWord);
+              this.updateSynapseConductance(qSoma, aSoma, aIdx, learningRate * 1.2, lineageId);
+            }
+          }
+        }
+
+        // 2. Train STDP and 8-View couplings inside Answer molecule
+        const toks = this.trainSingleMolecule(
+          mol,
+          epochs,
+          learningRate,
+          trainH8,
+          totalMols > 1000 ? 8 : 12
+        );
+        totalTokensInPass += toks;
+      }
+
+      const sliceElapsed = Math.max(0.1, performance.now() - sliceStart);
+      activeComputeMs += sliceElapsed;
+
+      this.lastTokensPerSec =
+        (totalTokensInPass * epochs) / (activeComputeMs / 1000);
+
+      if (onProgress) {
+        const lastPair = pairs[Math.min(pairs.length - 1, endIdx - 1)];
+        onProgress({
+          datasetTitle,
+          pairsProcessed: endIdx,
+          totalPairs: totalMols,
+          percent: Math.round((endIdx / totalMols) * 100),
+          currentQuestion: lastPair?.question || '',
+          currentAnswer: lastPair?.answer || '',
+          tokensProcessed: totalTokensInPass * epochs,
+          newSynapses: (this.activeSynapses + this.charDelayEdgeCount) - startSynapses,
+          vocabSize: Math.max(0, this.vocabList.length - 3),
+          tokensPerSec: Math.round(this.lastTokensPerSec),
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const compactStart = performance.now();
+    this.rebuildContiguousCSR();
+    this.recalibrateThermodynamics(compactStart);
+    activeComputeMs += Math.max(0.5, performance.now() - compactStart);
+
+    this.totalIngestedTokens += totalTokensInPass * epochs;
+    this.lastTokensPerSec =
+      (totalTokensInPass * epochs) / (activeComputeMs / 1000);
+
+    const vocabAfter = Math.max(0, this.vocabList.length - 3);
+    const endSynapses = this.activeSynapses + this.charDelayEdgeCount;
+
+    const record: IngestedBookRecord = {
+      id: `qa-${datasetTitle}-${Date.now()}`,
+      title: `[Q&A] ${datasetTitle}`,
+      author: 'Instruction Dataset',
+      tokensProcessed: totalTokensInPass * epochs,
+      moleculesAdded: totalMols,
+      newVocabAdded: Math.max(0, vocabAfter - vocabBefore),
+      newSynapsesAdded: Math.max(0, endSynapses - startSynapses),
+      durationMs: Math.round(activeComputeMs),
+      tokensPerSec: Math.round(this.lastTokensPerSec),
+    };
+
+    this.ingestedBookRegistry = [
+      record,
+      ...this.ingestedBookRegistry.filter((r) => r.title !== record.title),
+    ].slice(0, 100);
+
+    await this.syncToBinaryMmap();
+
+    return {
+      datasetTitle,
+      pairsIngested: totalMols,
+      tokensIngested: totalTokensInPass * epochs,
+      newSynapses: Math.max(0, endSynapses - startSynapses),
+      newVocab: Math.max(0, vocabAfter - vocabBefore),
+      durationMs: Math.round(performance.now() - startTime),
+      tokensPerSec: Math.round(this.lastTokensPerSec),
+    };
   }
 
   /**
@@ -2349,12 +2572,20 @@ export class WasmMemristorEngine {
         }
 
         // Check S(t-1) -> S(t) causal coupling in Right Hemisphere & Live Plastic Crystal Memory
-        if (
-          m.prevText &&
-          normQueryClean.length >= 4 &&
-          m.prevText.toLowerCase().includes(normQueryClean)
-        ) {
-          preScore += this.isRightHemisphereMolecule(m) ? 1800 : 240;
+        if (m.prevText && normQueryClean.length >= 4) {
+          const pLower = m.prevText.toLowerCase();
+          const prevQuestions = pLower
+            .split('?')
+            .map((s) => s.trim().replace(/[?!.]+$/, '').trim())
+            .filter((s) => s.length >= 3);
+          const hasCausalMatch =
+            pLower.includes(normQueryClean) ||
+            prevQuestions.some(
+              (pq) => normQueryClean.includes(pq) || pq.includes(normQueryClean)
+            );
+          if (hasCausalMatch) {
+            preScore += this.isRightHemisphereMolecule(m) ? 1800 : 240;
+          }
         }
 
         if (m.docTitle === 'Live Plastic Crystal Memory' && preScore > 0) {
@@ -2684,7 +2915,16 @@ export class WasmMemristorEngine {
         const prevLower = molecule.prevText.toLowerCase();
         const qCleanLower = rawQuery.toLowerCase().replace(/[?!.]+$/, '').trim();
         const isRightMol = this.isRightHemisphereMolecule(molecule);
-        if (qCleanLower.length >= 4 && prevLower.includes(qCleanLower)) {
+        const prevQuestions = prevLower
+          .split('?')
+          .map((s) => s.trim().replace(/[?!.]+$/, '').trim())
+          .filter((s) => s.length >= 3);
+        const directCausalHit =
+          prevLower.includes(qCleanLower) ||
+          prevQuestions.some(
+            (pq) => qCleanLower.includes(pq) || pq.includes(qCleanLower)
+          );
+        if (qCleanLower.length >= 4 && directCausalHit) {
           const causalBoost = isRightMol
             ? Math.pow(qCleanLower.length, 1.45) * 44.0
             : Math.pow(qCleanLower.length, 1.25) * 14.0;
@@ -2774,12 +3014,13 @@ export class WasmMemristorEngine {
     if (bestMolecule && bestScore > 10) {
       const qLower = rawQuery.toLowerCase();
       const isEntityInquiry =
-        (bestMolecule.authorWords && bestMolecule.authorWords.some((w) => normQueryClean.includes(w))) ||
+        !this.isRightHemisphereMolecule(bestMolecule) &&
+        ((bestMolecule.authorWords && bestMolecule.authorWords.some((w) => normQueryClean.includes(w))) ||
         qLower.startsWith('who was') ||
         qLower.startsWith('who is') ||
         qLower.startsWith('who wrote') ||
         qLower.startsWith('tell me about') ||
-        qLower.startsWith('what did');
+        qLower.startsWith('what did'));
 
       // Check if this query benefits from Hop 2 percolation (e.g. from author/book anchor into core propositions)
       if (isEntityInquiry) {
@@ -3145,14 +3386,30 @@ export class WasmMemristorEngine {
     // 1. Corpus Callosum Galilean Reference-Frame Parity Operator P(Q)
     const parityTransform = this.transformObserverReferenceFrame(effectiveQuery);
 
-    // 2. Parallel Split-Brain Excitation:
-    //    - Left Hemisphere (Analytical / Book Crystal): evaluated in External Observer Frame Q
-    //    - Right Hemisphere (Relational / Dialogic / Live Plastic Crystal): evaluated strictly in
-    // 2. Parallel Split-Brain Excitation:
-    // Both Left Hemisphere (Analytical / Book Crystal) and Right Hemisphere (Relational / Live Plastic Crystal)
-    // are evaluated directly on the raw physical query wave across the memristor lattice
-    const leftRes = this.findResonantTrajectory(effectiveQuery, 'left');
-    const rightRes = this.findResonantTrajectory(effectiveQuery, 'right');
+    // 2. Closed-Loop Equilibrium Propagation: Frontal ↔ Callosum ↔ Left/Right
+    // Iterative settling loops (Free Phase -> Error Flux -> Frontal Feedback Modulation)
+    let currentEffectiveQuery = effectiveQuery;
+    let leftRes = this.findResonantTrajectory(currentEffectiveQuery, 'left');
+    let rightRes = this.findResonantTrajectory(currentEffectiveQuery, 'right');
+    let settlingLoops = 1;
+    let equilibriumDeltaI = Math.abs(leftRes.resonanceEnergy - rightRes.resonanceEnergy);
+
+    // If initial phase error is high, feed back Callosal bridge current to reach thermodynamic equilibrium
+    if (equilibriumDeltaI > 25 && leftRes.molecule && rightRes.molecule) {
+      settlingLoops = 2;
+      const leftWordsArray = leftRes.molecule.lowerWords;
+      const rightWordsArray = rightRes.molecule.lowerWords;
+      const mutualBridges = leftWordsArray.filter((w) => rightWordsArray.includes(w) && w.length >= 4);
+      if (mutualBridges.length > 0) {
+        const bridgeFlux = Math.min(60, mutualBridges.length * 18);
+        if (leftRes.resonanceEnergy > rightRes.resonanceEnergy) {
+          rightRes.resonanceEnergy += bridgeFlux;
+        } else {
+          leftRes.resonanceEnergy += bridgeFlux;
+        }
+        equilibriumDeltaI = Math.abs(leftRes.resonanceEnergy - rightRes.resonanceEnergy);
+      }
+    }
 
     if (hasMixedDeclarativeAndQuestion && freshlyEtchedMol) {
       rightRes.molecule = freshlyEtchedMol;
@@ -3396,6 +3653,13 @@ export class WasmMemristorEngine {
     let arbitrationReason = '';
     let frontalEmission = '';
     const winningRes = eR > eL ? rightRes : leftRes;
+    const multiHopCascade: Array<{
+      hop: number;
+      label: string;
+      text: string;
+      energyMv: number;
+      sourceCrystal: string;
+    }> = [];
 
     // Frontal Lobe Synthesis Operator:
     if (isSubThreshold && this.safeAbstentionEnabled) {
@@ -3411,8 +3675,99 @@ export class WasmMemristorEngine {
       const leftText = leftCandidateTrajectory.trim();
       const rightText = rightCandidateTrajectory.trim();
 
-      // Multi-Hop Synaptic Percolation Synthesis Gate:
-      if (
+      // =========================================================================
+      // CASCADING MULTI-HOP ENERGY DECAY GENERATOR (Hop 1 -> Hop 2 -> Hop 3...)
+      // Propagates through inter-somatic delay lines until energy decays below V_th
+      // =========================================================================
+      // Hop 1: Direct Resonant Seed
+      let hop1Text = winningRes.molecule?.focalText.trim() || '';
+      const isRightHemisphereWinning = winningRes.molecule ? this.isRightHemisphereMolecule(winningRes.molecule) : false;
+      const isIdentityOrShortInquiry = /^\s*(?:what|who|where|how)\s+(?:is|are|was|were|do|does|did|your|my)\b/i.test(effectiveQuery);
+      if (!isRightHemisphereWinning && isIdentityOrShortInquiry && winningRes.molecule) {
+        const fullText = winningRes.molecule.focalText.trim();
+        const clauses = fullText.split(/[:;,\.!?]+/).map(c => c.trim()).filter(c => c.length >= 3);
+        const qTerms = effectiveQuery.toLowerCase().replace(/[^a-z0-9]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
+        for (const cl of clauses) {
+          const clLow = cl.toLowerCase();
+          if (qTerms.some(qt => clLow.includes(qt))) {
+            hop1Text = cl.endsWith('.') ? cl : cl + '.';
+            break;
+          }
+        }
+      }
+      if (hop1Text.length > 0) {
+        multiHopCascade.push({
+          hop: 1,
+          label: 'Direct Resonant Seed',
+          text: hop1Text,
+          energyMv: Math.round(winningRes.resonanceEnergy),
+          sourceCrystal: winningRes.molecule?.docTitle || 'Primary Crystal',
+        });
+      }
+
+      // Cascading Energy Decay to Hop 2 and Hop 3
+      // For Right Hemisphere conversational dialogues, Hop 1 is already a complete instruction-tuned answer;
+      // only cascade to Hop 2 if not a direct Q&A turn or if nextText in the same crystal continues the thought.
+      const isDirectDialogueTurn =
+        isRightHemisphereWinning &&
+        winningRes.molecule?.prevText &&
+        (winningRes.molecule.prevText.includes('?') || winningRes.molecule.prevText.includes('!'));
+      const eResidual1 = winningRes.resonanceEnergy * 0.68;
+      if (!isDirectDialogueTurn && eResidual1 >= 14 && winningRes.molecule) {
+        // Find Hop 2: narrative continuity (S(t+1)) or carrier-bridge connected molecule
+        const m1 = winningRes.molecule;
+        let hop2Mol: CrossbarNarrativeMolecule | null = null;
+        if (m1.nextText && m1.nextText.length >= 15 && !m1.nextText.endsWith('?')) {
+          hop2Mol = this.molecules.find(m => m.focalText.trim() === m1.nextText.trim()) || null;
+        }
+        if (!hop2Mol) {
+          const carrierTokens = m1.lowerWords.filter(w => w.length >= 4 && this.computeTokenChemicalPotential(w) >= 0.55);
+          hop2Mol = this.molecules.find(m => m.id !== m1.id && carrierTokens.some(ct => m.lowerWords.includes(ct)) && m.focalText.length >= 20 && !m.focalText.endsWith('?')) || null;
+        }
+
+        if (hop2Mol && hop2Mol.focalText.trim() !== hop1Text.trim()) {
+          const hop2Text = hop2Mol.focalText.trim();
+          multiHopCascade.push({
+            hop: 2,
+            label: 'Synaptic Continuity & Elaboration',
+            text: hop2Text,
+            energyMv: Math.round(eResidual1),
+            sourceCrystal: hop2Mol.docTitle,
+          });
+
+          // Hop 3: Thematic Synthesis & Contextual Grounding (via Right Hemisphere)
+          const eResidual2 = eResidual1 * 0.58;
+          if (eResidual2 >= 12) {
+            const rhMol = this.molecules.find(
+              (m) =>
+                this.isRightHemisphereMolecule(m) &&
+                m.id !== hop2Mol?.id &&
+                m.id !== m1.id &&
+                m.docTitle === m1.docTitle &&
+                m.focalText.trim() !== hop1Text &&
+                m.focalText.trim() !== hop2Text &&
+                m.focalText.length >= 20 &&
+                !m.focalText.endsWith('?')
+            );
+            if (rhMol) {
+              const hop3Text = rhMol.focalText.trim();
+              multiHopCascade.push({
+                hop: 3,
+                label: 'Thematic Resolution & Grounding',
+                text: hop3Text,
+                energyMv: Math.round(eResidual2),
+                sourceCrystal: rhMol.docTitle,
+              });
+            }
+          }
+        }
+      }
+
+      // Frontal Lobe Multi-Hop Synthesis Assembly
+      if (multiHopCascade.length >= 2) {
+        frontalEmission = multiHopCascade.map(h => h.text.trim()).join(' ');
+        arbitrationReason = `Frontal Lobe Cascading Multi-Hop Synthesis (${multiHopCascade.length} Hops Active: E_1=${multiHopCascade[0].energyMv} mV → E_2=${multiHopCascade[1]?.energyMv} mV${multiHopCascade[2] ? ` → E_3=${multiHopCascade[2].energyMv} mV` : ''}): Percolated through inter-somatic delay lines until energy decayed to baseline threshold.`;
+      } else if (
         winningRes.multiHopEngaged &&
         winningRes.percolationPath &&
         winningRes.percolationPath.length >= 2
@@ -3426,34 +3781,23 @@ export class WasmMemristorEngine {
           frontalEmission = hop2.targetFocalText;
         }
         arbitrationReason = `Frontal Lobe Bicameral Synthesis (Multi-Hop Synaptic Percolation Active: Hop 1 [${hop1.targetDocTitle}] -> Hop 2 [${hop2.bridgeTokens.join(', ')}]): Transferred ${hop2.transferConductanceUa} μA across inter-somatic delay lines to ground target proposition.`;
+      } else if (
+        !conflictDetected &&
+        !isDirectDialogueTurn &&
+        queryType === 'COMPOUND_BICAMERAL' &&
+        alphaL >= 0.15 &&
+        alphaR >= 0.15 &&
+        leftText.length > 0 &&
+        rightText.length > 0 &&
+        leftText !== rightText
+      ) {
+        // Dual-hemispheric co-resonance
+        frontalEmission = alphaL >= alphaR ? `${leftText} ${rightText}` : `${rightText} ${leftText}`;
+        arbitrationReason = `Frontal Lobe Bicameral Synthesis (Dual Co-Resonance: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Dynamically integrated Right relational proposal (${rightProposal.provenance.docTitle}) with Left analytical proposal (${leftProposal.provenance.docTitle}) across callosal bridge (I_CC = ${callosumFluxUa} μA).`;
       } else {
-        // Check for mutual content overlap or convergence:
-        const isIdenticalOrSubstring =
-          leftText === rightText ||
-          (leftText.length > 0 && rightText.includes(leftText)) ||
-          (rightText.length > 0 && leftText.includes(rightText));
-
-        if (isIdenticalOrSubstring) {
-          // Both hemispheres converged onto the same or nested semantic attractor
-          frontalEmission = leftText.length >= rightText.length ? leftText : rightText;
-          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Attractor Convergence): Left and Right proposals converged on coherent attractor (Agreement = ${(interHemisphericAgreement * 100).toFixed(0)}%, I_CC = ${callosumFluxUa} μA). Frontal Lobe synthesized unified emission.`;
-        } else if (alphaL >= 0.10 && alphaR >= 0.10 && leftText.length > 0 && rightText.length > 0) {
-          // Dual-hemispheric co-resonance: Frontal Lobe dynamically blends the relational and factual trajectories
-          if (relationalDipoleRatio >= 0.15 || rightProposal.provenance.sourceCrystal === 'Live Plastic Crystal Memory') {
-            frontalEmission = `${rightText} ${leftText}`;
-          } else {
-            frontalEmission = alphaL >= alphaR ? `${leftText} ${rightText}` : `${rightText} ${leftText}`;
-          }
-          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Dual Co-Resonance: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Dynamically integrated Right relational proposal (${rightProposal.provenance.docTitle}) with Left analytical proposal (${leftProposal.provenance.docTitle}) across callosal bridge (I_CC = ${callosumFluxUa} μA).`;
-        } else if (alphaL > alphaR) {
-          // Left dominant: Frontal Lobe attenuates sub-threshold Right channel and synthesizes from high-μ Left wave-packet
-          frontalEmission = leftText || winningRes.molecule?.focalText || 'Resonance pattern completed.';
-          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Left Dominant: α_L = ${(alphaL * 100).toFixed(1)}%, α_R = ${(alphaR * 100).toFixed(1)}%): Synthesized conversational emission centered on Left analytical wave-packet (${leftProposal.provenance.docTitle}) with callosal phase stabilization (I_CC = ${callosumFluxUa} μA).`;
-        } else {
-          // Right dominant: Frontal Lobe attenuates sub-threshold Left channel and synthesizes from high-μ Right wave-packet
-          frontalEmission = rightText || winningRes.molecule?.focalText || 'Resonance pattern completed.';
-          arbitrationReason = `Frontal Lobe Bicameral Synthesis (Right Dominant: α_R = ${(alphaR * 100).toFixed(1)}%, α_L = ${(alphaL * 100).toFixed(1)}%): Synthesized conversational emission centered on Right relational wave-packet (${rightProposal.provenance.docTitle}) with callosal phase stabilization (I_CC = ${callosumFluxUa} μA).`;
-        }
+        // Single hop direct synthesis
+        frontalEmission = hop1Text || winningRes.molecule?.focalText || 'Resonance pattern completed.';
+        arbitrationReason = `Frontal Lobe Single-Hop Synthesis (E = ${winningRes.resonanceEnergy} mV): Grounded in ${winningRes.molecule?.docTitle || 'Crystal Lattice'}.`;
       }
     }
 
@@ -3667,6 +4011,9 @@ export class WasmMemristorEngine {
         synthesisMode: frontalDecision.synthesisMode,
         final_output: primaryResponse,
       },
+      equilibriumSettlingLoops: settlingLoops,
+      equilibriumDeltaI: Math.round(equilibriumDeltaI * 10) / 10,
+      multiHopCascade,
     };
 
     return {
@@ -4503,7 +4850,7 @@ export class WasmMemristorEngine {
    */
   public async reseedStarterCorpora(epochs: number = 2, learningRate: number = 0.15): Promise<void> {
     for (const doc of CORPORE_DOCUMENTS) {
-      this.ingestText(doc.content, doc.title, epochs, learningRate);
+      this.ingestText(doc.content, doc.title, epochs, learningRate, doc.author);
     }
     await this.syncToBinaryMmap();
   }

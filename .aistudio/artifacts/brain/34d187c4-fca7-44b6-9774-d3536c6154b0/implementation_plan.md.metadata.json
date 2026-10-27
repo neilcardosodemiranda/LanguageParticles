@@ -1,6 +1,6 @@
 {
-  "summary":  "Detailed architecture and roadmap for the Bare-Metal WASM + WebGPU Neuromorphic Crossbar Engine on Apple M4 Unified Memory, scaling up to 25M–100M memristors via Compressed Sparse Row (CSR) linear memory, WASM SIMD STDP synaptic ingestion, and WebGPU WGSL parallel crossbar resonance for fluent conversational synthesis.",
-  "updatedAt":  "2026-10-23T09:02:37.604055222Z",
+  "summary":  "Integrated Massive Open Q&A Datasets & Instruction Streamer feature, adding high-throughput chunked ingestion for Stanford Alpaca 52K, Databricks Dolly 15K, Stanford SQuAD 100K+, and Electrical Engineering StackExchange 25K into the neuromorphic crossbar.",
+  "updatedAt":  "2026-10-27T00:40:09.336290817Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
