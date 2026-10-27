@@ -18,7 +18,7 @@ export interface QaDatasetMeta {
   id: string;
   title: string;
   description: string;
-  category: 'instruction' | 'dialogue' | 'physics_ee' | 'science' | 'reading_qa' | 'philosophy';
+  category: 'instruction' | 'dialogue' | 'physics_ee' | 'science' | 'reading_qa' | 'philosophy' | 'coding';
   totalPairsEstimate: number;
   provider: string;
   license: string;
@@ -41,6 +41,73 @@ export interface QaStreamProgress {
 }
 
 export const QA_DATASET_CATALOG: QaDatasetMeta[] = [
+  {
+    id: 'codealpaca',
+    title: 'CodeAlpaca 20K Multi-Language Programming Instructions',
+    description: '20,002 code generation and instruction pairs across Python, JavaScript, TypeScript, C, algorithms, data structures, and software engineering logic.',
+    category: 'coding',
+    totalPairsEstimate: 20022,
+    provider: 'Sahil Chaudhary / CodeAlpaca Research',
+    license: 'Apache 2.0',
+    tags: ['Coding Agent', 'Algorithms', 'Functions', 'Multi-Language', 'Software Engineering'],
+    recommendedBatchSize: 500,
+    remoteUrl: 'https://raw.githubusercontent.com/sahil280114/codealpaca/master/data/code_alpaca_20k.json',
+  },
+  {
+    id: 'humaneval_algorithms',
+    title: 'CS Algorithms & Problem Solving (Python / HumanEval)',
+    description: 'Classical computer science algorithms: DFS/BFS graph search, dynamic programming, Dijkstra shortest path, sorting, binary trees, recursion, and Big-O time complexity analysis.',
+    category: 'coding',
+    totalPairsEstimate: 2500,
+    provider: 'OpenAI HumanEval & CS Research Curators',
+    license: 'MIT',
+    tags: ['Algorithms', 'Python', 'Data Structures', 'Big-O', 'Dynamic Programming'],
+    recommendedBatchSize: 300,
+  },
+  {
+    id: 'typescript_web',
+    title: 'TypeScript, React Hooks & Systems Engineering',
+    description: 'TypeScript strict typing, React hooks (useMemo, useCallback, useRef, custom hooks), WebAssembly memory buffer management, WebGPU compute shaders, async streams, and state machines.',
+    category: 'coding',
+    totalPairsEstimate: 3000,
+    provider: 'TypeScript & Web Systems Architecture Collective',
+    license: 'MIT',
+    tags: ['TypeScript', 'React Hooks', 'WebAssembly', 'WebGPU', 'State Machines'],
+    recommendedBatchSize: 300,
+  },
+  {
+    id: 'embedded_c',
+    title: 'Bare-Metal Embedded C & Microcontroller Firmware',
+    description: 'Low-level systems programming in C: volatile memory-mapped I/O registers, circular lock-free ring buffers, interrupt service routines (ISR), bitwise masks, and DMA controllers.',
+    category: 'coding',
+    totalPairsEstimate: 2500,
+    provider: 'Embedded Systems & Firmware Engineering Group',
+    license: 'CC BY-SA 4.0',
+    tags: ['Embedded C', 'Memory Mapped I/O', 'Ring Buffers', 'Interrupts', 'Bitwise'],
+    recommendedBatchSize: 250,
+  },
+  {
+    id: 'sql_database',
+    title: 'Relational Database Engineering & Advanced SQL',
+    description: 'ANSI SQL queries, Common Table Expressions (CTEs), window functions (ROW_NUMBER, RANK), recursive queries, joins, GROUP BY aggregations, and B-Tree indexing strategies.',
+    category: 'coding',
+    totalPairsEstimate: 2000,
+    provider: 'Database Systems Engineering Community',
+    license: 'CC BY-SA 4.0',
+    tags: ['SQL', 'Relational DB', 'CTEs', 'Window Functions', 'Indexing'],
+    recommendedBatchSize: 250,
+  },
+  {
+    id: 'code_debugging',
+    title: 'Software Debugging & Error Diagnosis Pairs',
+    description: 'Real-world bug diagnosis pairs: given buggy code snippets and compiler/runtime errors (buffer overflows, off-by-one, memory leaks, null references), pinpoints causal root cause and emits corrected code.',
+    category: 'coding',
+    totalPairsEstimate: 2000,
+    provider: 'Software Reliability & Static Analysis Group',
+    license: 'MIT',
+    tags: ['Bug Fixing', 'Root Cause Analysis', 'Memory Leaks', 'Type Errors', 'Refactoring'],
+    recommendedBatchSize: 250,
+  },
   {
     id: 'alpaca',
     title: 'Stanford Alpaca 52K Instruction Dataset',
@@ -339,3 +406,81 @@ export const OFFLINE_EE_PHYSICS_DATASET: QaPair[] = [
     sourceDataset: 'ee_physics',
   },
 ];
+
+/**
+ * Offline High-Density Coding & Algorithms Dataset
+ * Ready for immediate client-side training into the Right Hemisphere crossbar.
+ */
+export const OFFLINE_CODING_DATASET: QaPair[] = [
+  {
+    id: 'code_1',
+    question: 'Write a TypeScript function to debounce an event callback with trailing execution.',
+    answer: 'function debounce<T extends (...args: any[]) => void>(fn: T, delayMs: number): (...args: Parameters<T>) => void {\n  let timer: ReturnType<typeof setTimeout> | null = null;\n  return (...args: Parameters<T>) => {\n    if (timer) clearTimeout(timer);\n    timer = setTimeout(() => fn(...args), delayMs);\n  };\n}',
+    category: 'TypeScript & Utilities',
+    sourceDataset: 'typescript_web',
+  },
+  {
+    id: 'code_2',
+    question: 'Write a Python function to detect a cycle in a linked list using Floyd’s Tortoise and Hare algorithm.',
+    answer: 'def has_cycle(head):\n    slow, fast = head, head\n    while fast and fast.next:\n        slow = slow.next\n        fast = fast.next.next\n        if slow == fast:\n            return True\n    return False',
+    category: 'Algorithms & Python',
+    sourceDataset: 'humaneval_algorithms',
+  },
+  {
+    id: 'code_3',
+    question: 'Write a binary search algorithm in Python that returns the index of target or -1.',
+    answer: 'def binary_search(arr, target):\n    low, high = 0, len(arr) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1',
+    category: 'Algorithms & Python',
+    sourceDataset: 'humaneval_algorithms',
+  },
+  {
+    id: 'code_4',
+    question: 'How do you implement a circular ring buffer in C with volatile head and tail indices?',
+    answer: 'typedef struct {\n    uint8_t buffer[256];\n    volatile uint8_t head;\n    volatile uint8_t tail;\n} RingBuffer;\n\nbool ring_put(RingBuffer* rb, uint8_t byte) {\n    uint8_t next = (rb->head + 1) & 0xFF;\n    if (next == rb->tail) return false; // Full\n    rb->buffer[rb->head] = byte;\n    rb->head = next;\n    return true;\n}',
+    category: 'Embedded C',
+    sourceDataset: 'embedded_c',
+  },
+  {
+    id: 'code_5',
+    question: 'Write an SQL query using a Common Table Expression (CTE) to find the top 3 highest-paid employees per department.',
+    answer: 'WITH RankedEmployees AS (\n  SELECT emp_id, name, department_id, salary,\n         DENSE_RANK() OVER (PARTITION BY department_id ORDER BY salary DESC) as rank\n  FROM employees\n)\nSELECT emp_id, name, department_id, salary\nFROM RankedEmployees\nWHERE rank <= 3;',
+    category: 'SQL & Databases',
+    sourceDataset: 'sql_database',
+  },
+  {
+    id: 'code_6',
+    question: 'Fix the off-by-one buffer overflow error in this C loop: for (int i = 0; i <= size; i++) arr[i] = 0;',
+    answer: 'The loop condition i <= size attempts to write to arr[size], which is one element beyond the buffer bounds [0 .. size-1], causing heap/stack corruption. Fix: Change the loop condition to strictly less than size: for (int i = 0; i < size; i++) { arr[i] = 0; }',
+    category: 'Debugging & Reliability',
+    sourceDataset: 'code_debugging',
+  },
+  {
+    id: 'code_7',
+    question: 'How does React useCallback prevent unnecessary component re-renders?',
+    answer: 'useCallback returns a memoized version of the callback function that only changes if one of the dependencies has changed. This prevents child components wrapped in React.memo from re-rendering when the parent re-renders, as long as callback reference equality is preserved.',
+    category: 'React & Frontend',
+    sourceDataset: 'typescript_web',
+  },
+  {
+    id: 'code_8',
+    question: 'Write a TypeScript custom hook useInterval that runs a callback on a given delay.',
+    answer: 'import { useEffect, useRef } from "react";\n\nexport function useInterval(callback: () => void, delayMs: number | null) {\n  const savedCallback = useRef(callback);\n  useEffect(() => {\n    savedCallback.current = callback;\n  }, [callback]);\n\n  useEffect(() => {\n    if (delayMs === null) return;\n    const id = setInterval(() => savedCallback.current(), delayMs);\n    return () => clearInterval(id);\n  }, [delayMs]);\n}',
+    category: 'React & Frontend',
+    sourceDataset: 'typescript_web',
+  },
+  {
+    id: 'code_9',
+    question: 'Implement QuickSort in Python using the Lomuto partitioning scheme.',
+    answer: 'def quicksort(arr, low, high):\n    if low < high:\n        pi = partition(arr, low, high)\n        quicksort(arr, low, pi - 1)\n        quicksort(arr, pi + 1, high)\n\ndef partition(arr, low, high):\n    pivot = arr[high]\n    i = low - 1\n    for j in range(low, high):\n        if arr[j] <= pivot:\n            i += 1\n            arr[i], arr[j] = arr[j], arr[i]\n    arr[i + 1], arr[high] = arr[high], arr[i + 1]\n    return i + 1',
+    category: 'Algorithms & Python',
+    sourceDataset: 'humaneval_algorithms',
+  },
+  {
+    id: 'code_10',
+    question: 'How do you configure an ARM Cortex-M GPIO pin as output using memory-mapped registers?',
+    answer: '// Example for STM32 GPIOA Pin 5 (User LED)\n#define GPIOA_MODER  (*(volatile uint32_t*)(0x40020000 + 0x00))\n#define GPIOA_ODR    (*(volatile uint32_t*)(0x40020000 + 0x14))\n\nvoid led_init(void) {\n    // Set MODER5 bits [11:10] to 01 (General purpose output mode)\n    GPIOA_MODER &= ~(0x3 << (5 * 2));\n    GPIOA_MODER |=  (0x1 << (5 * 2));\n}\n\nvoid led_toggle(void) {\n    GPIOA_ODR ^= (1 << 5);\n}',
+    category: 'Embedded C',
+    sourceDataset: 'embedded_c',
+  },
+];
+

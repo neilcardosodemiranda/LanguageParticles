@@ -5,6 +5,7 @@ import {
   QaPair,
   QaStreamProgress,
   OFFLINE_EE_PHYSICS_DATASET,
+  OFFLINE_CODING_DATASET,
 } from '../data/qaDatasetCatalog';
 import { wasmCrossbarEngine, CrossbarTelemetry } from '../physics/wasmMemristorEngine';
 
@@ -118,9 +119,11 @@ export const MassiveQaDatasetsView: React.FC<MassiveQaDatasetsViewProps> = ({
       pairsToIngest = data.pairs || [];
       hasMore = data.hasMore;
     } catch {
-      // Fallback to local offline EE physics dataset
+      // Fallback to local offline datasets
       if (datasetId === 'ee_physics') {
         pairsToIngest = OFFLINE_EE_PHYSICS_DATASET.slice(offset % OFFLINE_EE_PHYSICS_DATASET.length, (offset % OFFLINE_EE_PHYSICS_DATASET.length) + limit);
+      } else if (['codealpaca', 'humaneval_algorithms', 'typescript_web', 'embedded_c', 'sql_database', 'code_debugging'].includes(datasetId)) {
+        pairsToIngest = OFFLINE_CODING_DATASET.slice(offset % OFFLINE_CODING_DATASET.length, (offset % OFFLINE_CODING_DATASET.length) + limit);
       }
     }
 
@@ -352,6 +355,7 @@ export const MassiveQaDatasetsView: React.FC<MassiveQaDatasetsViewProps> = ({
           <span className="text-xs font-mono text-slate-400 mr-2">Filter Category:</span>
           {[
             { id: 'all', label: 'All Datasets' },
+            { id: 'coding', label: '💻 Coding Agent & Algorithms' },
             { id: 'physics_ee', label: '⚡ EE & Circuit Physics' },
             { id: 'instruction', label: '🧠 Stanford Alpaca 52K' },
             { id: 'dialogue', label: '💬 Human Dialogue & Dolly' },
@@ -700,12 +704,14 @@ export const MassiveQaDatasetsView: React.FC<MassiveQaDatasetsViewProps> = ({
         {/* Sample query chips */}
         <div className="flex flex-wrap gap-2">
           {[
+            "Who was Albert Einstein?",
+            "Write a TypeScript function to debounce an event callback with trailing execution.",
+            "Write a binary search algorithm in Python that returns the index of target or -1.",
+            "How do you implement a circular ring buffer in C with volatile head and tail indices?",
+            "Write an SQL query using a Common Table Expression (CTE) to find the top 3 highest-paid employees per department.",
             "What is Kirchhoff's Current Law?",
-            "How does an LC circuit resonate?",
             "What is a memristor in electrical circuits?",
-            "What was the Time Machine made of?",
             "What is your name?",
-            "What is Ohm's Law?",
           ].map((q, idx) => (
             <button
               key={idx}
@@ -752,7 +758,7 @@ export const MassiveQaDatasetsView: React.FC<MassiveQaDatasetsViewProps> = ({
               )}
             </div>
 
-            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg text-sm text-slate-100 font-mono leading-relaxed">
+            <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-lg text-xs text-slate-100 font-mono leading-relaxed whitespace-pre-wrap overflow-x-auto">
               {testAnswer}
             </div>
 

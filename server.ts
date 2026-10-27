@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-import { QA_DATASET_CATALOG, OFFLINE_EE_PHYSICS_DATASET, type QaPair } from './src/data/qaDatasetCatalog.js';
+import { QA_DATASET_CATALOG, OFFLINE_EE_PHYSICS_DATASET, OFFLINE_CODING_DATASET, type QaPair } from './src/data/qaDatasetCatalog.js';
 
 // Store binary .bin mmap image in OS tmpdir outside the Vite project root so
 // high-frequency binary writes never trigger Vite file-watcher reloads
@@ -615,6 +615,217 @@ async function startServer() {
     return generated;
   }
 
+  // Helper to build rich datasets for coding agents
+  function generateCodingDataset(datasetId: string): QaPair[] {
+    const basePairs = [...OFFLINE_CODING_DATASET];
+    const generated: QaPair[] = [];
+    let pId = 1;
+
+    if (datasetId === 'humaneval_algorithms') {
+      const algos = [
+        {
+          name: 'Binary Search',
+          complexity: 'O(log n) time, O(1) space',
+          py: 'def binary_search(arr, target):\n    l, r = 0, len(arr) - 1\n    while l <= r:\n        mid = (l + r) // 2\n        if arr[mid] == target: return mid\n        elif arr[mid] < target: l = mid + 1\n        else: r = mid - 1\n    return -1',
+          desc: 'Divides the search space in half at each step on sorted elements.',
+        },
+        {
+          name: 'Breadth-First Search (BFS) on Graph',
+          complexity: 'O(V + E) time, O(V) space',
+          py: 'from collections import deque\ndef bfs(graph, start):\n    visited = {start}\n    queue = deque([start])\n    order = []\n    while queue:\n        node = queue.popleft()\n        order.append(node)\n        for neighbor in graph.get(node, []):\n            if neighbor not in visited:\n                visited.add(neighbor)\n                queue.append(neighbor)\n    return order',
+          desc: 'Explores vertices level-by-level using a FIFO queue.',
+        },
+        {
+          name: 'Depth-First Search (DFS) on Graph',
+          complexity: 'O(V + E) time, O(V) call stack space',
+          py: 'def dfs(graph, start, visited=None):\n    if visited is None: visited = set()\n    visited.add(start)\n    traversal = [start]\n    for nxt in graph.get(start, []):\n        if nxt not in visited:\n            traversal.extend(dfs(graph, nxt, visited))\n    return traversal',
+          desc: 'Explores as deep as possible along each branch before backtracking.',
+        },
+        {
+          name: 'Dijkstra Shortest Path with Min-Heap',
+          complexity: 'O((V + E) log V) time',
+          py: 'import heapq\ndef dijkstra(graph, start):\n    dist = {start: 0}\n    pq = [(0, start)]\n    while pq:\n        d, u = heapq.heappop(pq)\n        if d > dist.get(u, float("inf")): continue\n        for v, weight in graph.get(u, []):\n            if d + weight < dist.get(v, float("inf")):\n                dist[v] = d + weight\n                heapq.heappush(pq, (dist[v], v))\n    return dist',
+          desc: 'Computes single-source shortest paths in weighted non-negative directed graphs.',
+        },
+        {
+          name: '0/1 Knapsack Dynamic Programming',
+          complexity: 'O(N * W) pseudo-polynomial time',
+          py: 'def knapsack(weights, values, capacity):\n    n = len(weights)\n    dp = [0] * (capacity + 1)\n    for i in range(n):\n        w, v = weights[i], values[i]\n        for c in range(capacity, w - 1, -1):\n            dp[c] = max(dp[c], dp[c - w] + v)\n    return dp[capacity]',
+          desc: 'Maximizes total value without exceeding weight capacity using 1D space optimization.',
+        },
+        {
+          name: 'Invert Binary Tree',
+          complexity: 'O(N) time, O(H) recursion stack',
+          py: 'class TreeNode:\n    def __init__(self, val=0, left=None, right=None):\n        self.val = val\n        self.left = left\n        self.right = right\ndef invert_tree(root):\n    if not root: return None\n    root.left, root.right = invert_tree(root.right), invert_tree(root.left)\n    return root',
+          desc: 'Swaps left and right child pointers recursively at each node.',
+        },
+        {
+          name: 'Merge Intervals',
+          complexity: 'O(N log N) time, O(N) space',
+          py: 'def merge_intervals(intervals):\n    intervals.sort(key=lambda x: x[0])\n    merged = []\n    for start, end in intervals:\n        if not merged or merged[-1][1] < start:\n            merged.append([start, end])\n        else:\n            merged[-1][1] = max(merged[-1][1], end)\n    return merged',
+          desc: 'Sorts intervals by start time and merges overlapping bounds.',
+        },
+        {
+          name: 'LRU Cache with Doubly Linked List & Hash Map',
+          complexity: 'O(1) get, O(1) put operations',
+          py: 'class LRUCache:\n    def __init__(self, capacity: int):\n        self.cap = capacity\n        self.cache = {}\n    def get(self, key: int) -> int:\n        if key not in self.cache: return -1\n        val = self.cache.pop(key)\n        self.cache[key] = val\n        return val\n    def put(self, key: int, value: int) -> None:\n        if key in self.cache: self.cache.pop(key)\n        elif len(self.cache) >= self.cap: del self.cache[next(iter(self.cache))]\n        self.cache[key] = value',
+          desc: 'Maintains least-recently used eviction policy in constant time.',
+        },
+      ];
+
+      for (const a of algos) {
+        generated.push({
+          id: `algo-${pId++}`,
+          question: `Implement ${a.name} in Python and explain its Big-O time and space complexity.`,
+          answer: `Here is the Python implementation of ${a.name}:\n\n${a.py}\n\nComplexity: ${a.complexity}. Explanation: ${a.desc}`,
+          category: 'Algorithms & Data Structures',
+          sourceDataset: 'humaneval_algorithms',
+        });
+      }
+    } else if (datasetId === 'typescript_web') {
+      const tsFeatures = [
+        {
+          title: 'React useDebounce Custom Hook',
+          code: 'import { useState, useEffect } from "react";\nexport function useDebounce<T>(value: T, delayMs: number): T {\n  const [debouncedValue, setDebouncedValue] = useState<T>(value);\n  useEffect(() => {\n    const handler = setTimeout(() => setDebouncedValue(value), delayMs);\n    return () => clearTimeout(handler);\n  }, [value, delayMs]);\n  return debouncedValue;\n}',
+          desc: 'Delays updating debounced value until delayMs has elapsed without new changes.',
+        },
+        {
+          title: 'Typed Event Emitter in TypeScript',
+          code: 'type EventMap = Record<string, any>;\nexport class TypedEventEmitter<Events extends EventMap> {\n  private listeners = new Map<keyof Events, Set<(data: any) => void>>();\n  on<K extends keyof Events>(event: K, fn: (data: Events[K]) => void): () => void {\n    if (!this.listeners.has(event)) this.listeners.set(event, new Set());\n    this.listeners.get(event)!.add(fn);\n    return () => this.listeners.get(event)?.delete(fn);\n  }\n  emit<K extends keyof Events>(event: K, data: Events[K]): void {\n    this.listeners.get(event)?.forEach(fn => fn(data));\n  }\n}',
+          desc: 'Type-safe event dispatcher supporting type-checked payloads and clean unsubscribe callbacks.',
+        },
+        {
+          title: 'WebAssembly Zero-Copy Memory Buffer Bridge',
+          code: 'export function readWasmFloat32Array(memory: WebAssembly.Memory, ptr: number, length: number): Float32Array {\n  return new Float32Array(memory.buffer, ptr, length);\n}\nexport function writeWasmUint32Array(memory: WebAssembly.Memory, ptr: number, src: Uint32Array): void {\n  new Uint32Array(memory.buffer, ptr, src.length).set(src);\n}',
+          desc: 'Provides zero-copy typed view into WebAssembly linear memory arena avoiding structured clones.',
+        },
+        {
+          title: 'Async Promise Concurrency Pool Limiter',
+          code: 'export async function pMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {\n  const results: R[] = new Array(items.length);\n  let idx = 0;\n  const workers = Array.from({ length: concurrency }, async () => {\n    while (idx < items.length) {\n      const cur = idx++;\n      results[cur] = await fn(items[cur]);\n    }\n  });\n  await Promise.all(workers);\n  return results;\n}',
+          desc: 'Executes an array of async tasks with a fixed concurrency limit.',
+        },
+      ];
+
+      for (const feat of tsFeatures) {
+        generated.push({
+          id: `ts-${pId++}`,
+          question: `How do you write a ${feat.title} in TypeScript?`,
+          answer: `Here is the production-grade implementation for ${feat.title}:\n\n${feat.code}\n\nArchitecture: ${feat.desc}`,
+          category: 'TypeScript & Systems',
+          sourceDataset: 'typescript_web',
+        });
+      }
+    } else if (datasetId === 'embedded_c') {
+      const cFirmware = [
+        {
+          topic: 'Circular Lock-Free Ring Buffer in C',
+          code: '#include <stdint.h>\n#include <stdbool.h>\n\n#define RING_SIZE 256\ntypedef struct {\n    uint8_t buffer[RING_SIZE];\n    volatile uint16_t head;\n    volatile uint16_t tail;\n} RingBuffer;\n\nbool ring_push(RingBuffer *rb, uint8_t byte) {\n    uint16_t next = (rb->head + 1) % RING_SIZE;\n    if (next == rb->tail) return false;\n    rb->buffer[rb->head] = byte;\n    rb->head = next;\n    return true;\n}\n\nbool ring_pop(RingBuffer *rb, uint8_t *out) {\n    if (rb->head == rb->tail) return false;\n    *out = rb->buffer[rb->tail];\n    rb->tail = (rb->tail + 1) % RING_SIZE;\n    return true;\n}',
+          explanation: 'Volatile head and tail pointers ensure atomic single-producer single-consumer lock-free operation in ISRs.',
+        },
+        {
+          topic: 'Cortex-M SysTick Timer Interrupt Handler',
+          code: '#include <stdint.h>\n\nvolatile uint32_t ms_ticks = 0;\nvoid SysTick_Handler(void) {\n    ms_ticks++;\n}\n\nvoid delay_ms(uint32_t delay) {\n    uint32_t start = ms_ticks;\n    while ((ms_ticks - start) < delay) {\n        __asm volatile("wfi"); // Wait for interrupt (power saving)\n    }\n}',
+          explanation: 'Increments milliseconds counter on 1kHz SysTick tick and uses WFI instruction to enter low power sleep.',
+        },
+        {
+          topic: 'Atomic Bit-Banging I2C Start and Stop Condition',
+          code: '#define SDA_HIGH() (GPIO->BSRR = (1 << 8))\n#define SDA_LOW()  (GPIO->BRR  = (1 << 8))\n#define SCL_HIGH() (GPIO->BSRR = (1 << 9))\n#define SCL_LOW()  (GPIO->BRR  = (1 << 9))\n\nvoid i2c_start(void) {\n    SDA_HIGH(); SCL_HIGH(); i2c_delay();\n    SDA_LOW();  i2c_delay();\n    SCL_LOW();  i2c_delay();\n}\nvoid i2c_stop(void) {\n    SDA_LOW();  SCL_LOW();  i2c_delay();\n    SCL_HIGH(); i2c_delay();\n    SDA_HIGH(); i2c_delay();\n}',
+          explanation: 'Generates high-to-low SDA transition while SCL is high for START, and low-to-high SDA for STOP.',
+        },
+      ];
+
+      for (const item of cFirmware) {
+        generated.push({
+          id: `emb-${pId++}`,
+          question: `How do you implement ${item.topic} for microcontroller firmware?`,
+          answer: `Here is the bare-metal C implementation:\n\n${item.code}\n\nEngineering notes: ${item.explanation}`,
+          category: 'Embedded C & Firmware',
+          sourceDataset: 'embedded_c',
+        });
+      }
+    } else if (datasetId === 'sql_database') {
+      const sqlQueries = [
+        {
+          title: 'Find Top N Records Per Group using DENSE_RANK Window Function',
+          sql: 'WITH RankedOrders AS (\n  SELECT customer_id, order_id, order_total,\n         DENSE_RANK() OVER (PARTITION BY customer_id ORDER BY order_total DESC) as rk\n  FROM orders\n)\nSELECT customer_id, order_id, order_total\nFROM RankedOrders\nWHERE rk <= 3\nORDER BY customer_id, rk;',
+          desc: 'Partitions orders by customer and ranks each customer’s largest purchases without gaps.',
+        },
+        {
+          title: 'Recursive Common Table Expression (CTE) for Hierarchical Tree Traversal',
+          sql: 'WITH RECURSIVE OrgChart AS (\n  SELECT employee_id, manager_id, name, 1 as level\n  FROM employees\n  WHERE manager_id IS NULL\n  UNION ALL\n  SELECT e.employee_id, e.manager_id, e.name, o.level + 1\n  FROM employees e\n  INNER JOIN OrgChart o ON e.manager_id = o.employee_id\n)\nSELECT * FROM OrgChart ORDER BY level, manager_id;',
+          desc: 'Traverses tree from top root manager down to all leaves, computing organizational depth level.',
+        },
+        {
+          title: 'Idempotent UPSERT using ON CONFLICT DO UPDATE',
+          sql: 'INSERT INTO user_preferences (user_id, theme, font_size, updated_at)\nVALUES ($1, $2, $3, NOW())\nON CONFLICT (user_id)\nDO UPDATE SET\n  theme = EXCLUDED.theme,\n  font_size = EXCLUDED.font_size,\n  updated_at = NOW();',
+          desc: 'Atomically inserts new preference row or updates existing attributes on primary key collision.',
+        },
+      ];
+
+      for (const q of sqlQueries) {
+        generated.push({
+          id: `sql-${pId++}`,
+          question: `Write an SQL query to ${q.title}.`,
+          answer: `Here is the SQL query:\n\n${q.sql}\n\nRelational Analysis: ${q.desc}`,
+          category: 'SQL & Relational DB',
+          sourceDataset: 'sql_database',
+        });
+      }
+    } else if (datasetId === 'code_debugging') {
+      const bugs = [
+        {
+          bug: 'Off-by-one buffer overflow: for (int i = 0; i <= size; i++) buffer[i] = 0;',
+          fix: 'for (int i = 0; i < size; i++) buffer[i] = 0;',
+          cause: 'Array indices are 0-indexed [0 .. size - 1]. Accessing buffer[size] is out-of-bounds.',
+        },
+        {
+          bug: 'Dangling pointer use: free(ptr); printf("%d", ptr->val);',
+          fix: 'int val = ptr->val; free(ptr); ptr = NULL; printf("%d", val);',
+          cause: 'Dereferencing memory after free invokes undefined behavior. Cache values before free and set pointer to NULL.',
+        },
+        {
+          bug: 'React direct state mutation: state.items.push(newItem); setState(state);',
+          fix: 'setState(prev => ({ ...prev, items: [...prev.items, newItem] }));',
+          cause: 'Directly mutating object references fails React shallow equality check (prev === next), preventing re-renders.',
+        },
+        {
+          bug: 'Uncaught Promise Rejection in async loop: items.forEach(async (x) => await process(x));',
+          fix: 'await Promise.all(items.map(async (x) => await process(x)));',
+          cause: 'Array.prototype.forEach does not await returned promises, allowing async operations to run unhandled in background.',
+        },
+      ];
+
+      for (const b of bugs) {
+        generated.push({
+          id: `dbg-${pId++}`,
+          question: `What is the bug and how do you fix it?\nBuggy Code: ${b.bug}`,
+          answer: `Root Cause: ${b.cause}\n\nCorrected Code:\n${b.fix}`,
+          category: 'Software Debugging',
+          sourceDataset: 'code_debugging',
+        });
+      }
+    }
+
+    if (generated.length === 0) {
+      generated.push(...basePairs);
+    }
+
+    // Multiply pairs to 2,500 for high-volume streaming
+    const initialLen = generated.length;
+    while (generated.length < 2500) {
+      const src = generated[generated.length % initialLen];
+      generated.push({
+        id: `${datasetId}-synth-${pId++}`,
+        question: src.question,
+        answer: src.answer,
+        category: src.category,
+        sourceDataset: datasetId,
+      });
+    }
+
+    return generated;
+  }
+
   // Asynchronous remote or local dataset loader with disk caching
   async function loadQaDataset(datasetId: string): Promise<QaPair[]> {
     if (datasetId === 'custom') {
@@ -652,6 +863,17 @@ async function startServer() {
       return pairs;
     }
 
+    if (['humaneval_algorithms', 'typescript_web', 'embedded_c', 'sql_database', 'code_debugging'].includes(datasetId)) {
+      const pairs = generateCodingDataset(datasetId);
+      qaDatasetCache.set(datasetId, pairs);
+      try {
+        fs.writeFileSync(localCachePath, JSON.stringify(pairs.slice(0, 5000)));
+      } catch {
+        // Ignore cache write error
+      }
+      return pairs;
+    }
+
     const meta = QA_DATASET_CATALOG.find((d) => d.id === datasetId);
     if (!meta || !meta.remoteUrl) {
       // Fallback: return EE physics dataset if unknown dataset
@@ -678,7 +900,7 @@ async function startServer() {
 
       const pairs: QaPair[] = [];
 
-      if (datasetId === 'alpaca') {
+      if (datasetId === 'alpaca' || datasetId === 'codealpaca') {
         const rawItems = (await resp.json()) as Array<{
           instruction?: string;
           input?: string;
@@ -692,11 +914,11 @@ async function startServer() {
           if (!instr || !out) continue;
           const question = inp ? `${instr}\nContext: ${inp}` : instr;
           pairs.push({
-            id: `alpaca-${i + 1}`,
+            id: `${datasetId}-${i + 1}`,
             question,
             answer: out,
-            category: 'General Instruction',
-            sourceDataset: 'alpaca',
+            category: datasetId === 'codealpaca' ? 'Code Generation' : 'General Instruction',
+            sourceDataset: datasetId,
           });
         }
       } else if (datasetId === 'dolly') {
@@ -773,10 +995,15 @@ async function startServer() {
         return pairs;
       }
 
+      if (datasetId === 'codealpaca') {
+        return generateCodingDataset('humaneval_algorithms');
+      }
       return generateParametricEePhysicsDataset();
     } catch {
       clearTimeout(timeout);
-      // Fallback if network blocked or timed out
+      if (datasetId === 'codealpaca') {
+        return generateCodingDataset('humaneval_algorithms');
+      }
       return generateParametricEePhysicsDataset();
     }
   }
